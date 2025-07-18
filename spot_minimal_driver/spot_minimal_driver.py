@@ -5,13 +5,14 @@ import rclpy
 from rclpy.node import Node
 from tf2_ros import TransformBroadcaster 
 from nav_msgs.msg import Odometry
-from geometry_msgs.msg import TransformStamped
+from geometry_msgs.msg import TransformStamped, Twist
 
 # Boston Dynamics SDK imports
 import bosdyn.client
 import bosdyn.client.lease
 import bosdyn.client.util
 from bosdyn.client.robot_state import RobotStateClient
+from bosdyn.client.estop import EstopClient, EstopEndpoint, EstopKeepAlive
 from bosdyn.client.robot_command import RobotCommandBuilder, RobotCommandClient, blocking_stand
 from bosdyn.client.frame_helpers import GRAV_ALIGNED_BODY_FRAME_NAME, ODOM_FRAME_NAME, get_a_tform_b
 
@@ -28,7 +29,9 @@ class SpotROS2Driver(Node):
         self.robot = None
         self.lease_keep_alive = None
 
+        # ROS 2 publishers and subscribers
         self.tf_broadcaster = TransformBroadcaster(self)
+        self.cmd_vel_subscriber = self.create_subscription(Twist, 'cmd_vel', self.cmd_vel_callback, 10)
 
         try:
             # Robot initialization 
@@ -92,6 +95,23 @@ class SpotROS2Driver(Node):
         t.transform.rotation.w = odom_tfrom_body.rotation.w
 
         self.tf_broadcaster.sendTransform(t)     
+
+    def cmd_vel_callback(self, msg: Twist):
+        """Callback for the /cmd_vel topic."""
+        v_x = msg.linear.x
+        v_y = msg.linear.y
+        v_rot = msg.angular.z
+
+        # Create a velocity command
+        command = RobotCommandBuilder.synchro_velocity_command(v_x=v_x, v_y=v_y, v_rot=v_rot)
+        end_time = time.time() + 0.6
+        
+        try:
+            # Send the command to the robot
+            self.command_client.robot_command(command, end_time_secs=end_time)
+            self.get_logger().debug(f'Sent velocity command: v_x={v_x}, v_y={v_y}, v_rot={v_rot}')
+        except Exception as e:
+            self.get_logger().error(f'Failed to send velocity command: {e}')
     
     def shutdown(self):
         """Shutdown the driver and release resources."""
