@@ -3,7 +3,7 @@ import time
 # ROS 2 imports
 import rclpy
 from rclpy.node import Node
-from tf2_ros import TransformBroadcaster 
+from tf2_ros import TransformBroadcaster
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import TransformStamped, Twist
 
@@ -34,7 +34,7 @@ class SpotROS2Driver(Node):
         self.cmd_vel_subscriber = self.create_subscription(Twist, 'cmd_vel', self.cmd_vel_callback, 10)
 
         try:
-            # Robot initialization 
+            # Robot initialization
             sdk = bosdyn.client.create_standard_sdk('SpotROS2DriverClient')
             self.robot = sdk.create_robot(self.hostname)
             bosdyn.client.util.authenticate(self.robot)
@@ -43,7 +43,7 @@ class SpotROS2Driver(Node):
             assert not self.robot.is_estopped(), 'Robot is estopped. Please use an external E-Stop client, ' \
                                              'such as the estop SDK example, to configure E-Stop.'
 
-            self.get_logger().info(f'Successfully authenticated and connected to the robot.')   
+            self.get_logger().info(f'Successfully authenticated and connected to the robot.')
 
             # Create SDK clients
             self.robot_state_client = self.robot.ensure_client(RobotStateClient.default_service_name)
@@ -71,11 +71,10 @@ class SpotROS2Driver(Node):
         # Main Loop
         self.timer = self.create_timer(0.1, self.timer_callback)
 
-    
     def timer_callback(self):
         """Periodic publish robot data (if connected)."""
         robot_state = self.robot_state_client.get_robot_state()
-        odom_tfrom_body = get_a_tform_b(robot_state.kinematic_state.transforms_snapshot, 
+        odom_tfrom_body = get_a_tform_b(robot_state.kinematic_state.transforms_snapshot,
                                         ODOM_FRAME_NAME, GRAV_ALIGNED_BODY_FRAME_NAME)
         self.publish_transform(odom_tfrom_body)
 
@@ -94,25 +93,22 @@ class SpotROS2Driver(Node):
         t.transform.rotation.z = odom_tfrom_body.rotation.z
         t.transform.rotation.w = odom_tfrom_body.rotation.w
 
-        self.tf_broadcaster.sendTransform(t)     
+        self.tf_broadcaster.sendTransform(t)
 
     def cmd_vel_callback(self, msg: Twist):
         """Callback for the /cmd_vel topic."""
-        v_x = msg.linear.x
-        v_y = msg.linear.y
-        v_rot = msg.angular.z
+        v_x, v_y, v_rot = msg.linear.x, msg.linear.y, msg.angular.z
 
-        # Create a velocity command
         command = RobotCommandBuilder.synchro_velocity_command(v_x=v_x, v_y=v_y, v_rot=v_rot)
-        end_time = time.time() + 0.6
-        
+        end_time = time.time() + 0.5
+
         try:
             # Send the command to the robot
             self.command_client.robot_command(command, end_time_secs=end_time)
             self.get_logger().debug(f'Sent velocity command: v_x={v_x}, v_y={v_y}, v_rot={v_rot}')
         except Exception as e:
             self.get_logger().error(f'Failed to send velocity command: {e}')
-    
+
     def shutdown(self):
         """Shutdown the driver and release resources."""
         # power off requires lease so we do it before releasing
@@ -142,6 +138,7 @@ def main(args=None):
         if spot_driver_node:
             spot_driver_node.shutdown()
             spot_driver_node.destroy_node()
+
 
 if __name__ == '__main__':
     main()
