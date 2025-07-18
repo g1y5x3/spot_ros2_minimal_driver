@@ -5,13 +5,16 @@ import rclpy
 from rclpy.node import Node
 from tf2_ros import TransformBroadcaster 
 from nav_msgs.msg import Odometry
+from geometry_msgs.msg import TransformStamped
 
 # Boston Dynamics SDK imports
 import bosdyn.client
 import bosdyn.client.lease
 import bosdyn.client.util
-from bosdyn.client.robot_command import RobotCommandBuilder, RobotCommandClient, blocking_stand
 from bosdyn.client.robot_state import RobotStateClient
+from bosdyn.client.robot_command import RobotCommandBuilder, RobotCommandClient, blocking_stand
+from bosdyn.client.frame_helpers import GRAV_ALIGNED_BODY_FRAME_NAME, ODOM_FRAME_NAME, get_a_tform_b
+
 
 class SpotROS2Driver(Node):
     """A minimal ROS 2 driver for Boston Dynamics Spot robot."""
@@ -24,6 +27,8 @@ class SpotROS2Driver(Node):
         # TODO: Add parameter for robot username and password if needed
         self.robot = None
         self.lease_keep_alive = None
+
+        self.tf_broadcaster = TransformBroadcaster(self)
 
         try:
             # Robot initialization 
@@ -59,6 +64,34 @@ class SpotROS2Driver(Node):
         except Exception as e:
             self.get_logger().error(f'Failed to connect to the robot: {e}')
             raise
+
+        # Main Loop
+        self.timer = self.create_timer(0.1, self.timer_callback)
+
+    
+    def timer_callback(self):
+        """Periodic publish robot data (if connected)."""
+        robot_state = self.robot_state_client.get_robot_state()
+        odom_tfrom_body = get_a_tform_b(robot_state.kinematic_state.transforms_snapshot, 
+                                        ODOM_FRAME_NAME, GRAV_ALIGNED_BODY_FRAME_NAME)
+        self.publish_transform(odom_tfrom_body)
+
+    def publish_transform(self, odom_tfrom_body):
+        """Publish the transform from ODOM to BODY frame."""
+        t = TransformStamped()
+        # TODO: sync with the robot's internal time
+        t.header.stamp = self.get_clock().now().to_msg()
+        t.header.frame_id = 'odom'
+        t.child_frame_id = 'base_link'
+        t.transform.translation.x = odom_tfrom_body.position.x
+        t.transform.translation.y = odom_tfrom_body.position.y
+        t.transform.translation.z = odom_tfrom_body.position.z
+        t.transform.rotation.x = odom_tfrom_body.rotation.x
+        t.transform.rotation.y = odom_tfrom_body.rotation.y
+        t.transform.rotation.z = odom_tfrom_body.rotation.z
+        t.transform.rotation.w = odom_tfrom_body.rotation.w
+
+        self.tf_broadcaster.sendTransform(t)     
     
     def shutdown(self):
         """Shutdown the driver and release resources."""
