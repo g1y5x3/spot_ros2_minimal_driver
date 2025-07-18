@@ -4,15 +4,16 @@ import time
 import rclpy
 from rclpy.node import Node
 from tf2_ros import TransformBroadcaster
-from nav_msgs.msg import Odometry
 from geometry_msgs.msg import TransformStamped, Twist
+from nav_msgs.msg import Odometry
 
 # Boston Dynamics SDK imports
 import bosdyn.client
-import bosdyn.client.lease
 import bosdyn.client.util
-from bosdyn.client.robot_state import RobotStateClient
+import bosdyn.client.lease
+from bosdyn.client.lease import LeaseClient, LeaseKeepAlive
 from bosdyn.client.estop import EstopClient, EstopEndpoint, EstopKeepAlive
+from bosdyn.client.robot_state import RobotStateClient
 from bosdyn.client.robot_command import RobotCommandBuilder, RobotCommandClient, blocking_stand
 from bosdyn.client.frame_helpers import GRAV_ALIGNED_BODY_FRAME_NAME, ODOM_FRAME_NAME, get_a_tform_b
 
@@ -26,8 +27,10 @@ class SpotROS2Driver(Node):
         self.declare_parameter('hostname', '192.168.80.3')
         self.hostname = self.get_parameter('hostname').get_parameter_value().string_value
         # TODO: Add parameter for robot username and password if needed
+
         self.robot = None
         self.lease_keep_alive = None
+        self.estop_keep_alive = None
 
         # ROS 2 publishers and subscribers
         self.tf_broadcaster = TransformBroadcaster(self)
@@ -40,20 +43,30 @@ class SpotROS2Driver(Node):
             bosdyn.client.util.authenticate(self.robot)
             self.robot.time_sync.wait_for_sync()
 
+            # NOTE: Not sure if this is necessary
             assert not self.robot.is_estopped(), 'Robot is estopped. Please use an external E-Stop client, ' \
-                                             'such as the estop SDK example, to configure E-Stop.'
+                                                 'such as the estop SDK example, to configure E-Stop.'
 
             self.get_logger().info(f'Successfully authenticated and connected to the robot.')
 
             # Create SDK clients
             self.robot_state_client = self.robot.ensure_client(RobotStateClient.default_service_name)
             self.command_client = self.robot.ensure_client(RobotCommandClient.default_service_name)
-            lease_client = self.robot.ensure_client(bosdyn.client.lease.LeaseClient.default_service_name)
+            lease_client = self.robot.ensure_client(LeaseClient.default_service_name)
+            estop_client = self.robot.ensure_client(EstopClient.default_service_name)
             self.get_logger().info('Robot clients created.')
 
             # Lease management
-            self.lease_keep_alive = bosdyn.client.lease.LeaseKeepAlive(lease_client, must_acquire=True, return_at_exit=True)
+            self.lease_keep_alive = LeaseKeepAlive(lease_client, must_acquire=True, return_at_exit=True)
             self.get_logger().info('Acquired lease.')
+
+            # Acquire E-Stop
+            estop_endpoint = EstopEndpoint(estop_client, 'SpotROS2DriverEStop', 10.0)
+            estop_endpoint.force_simple_setup()
+            self.estop_keep_alive = EstopKeepAlive(estop_endpoint)
+            self.get_logger().info('Acquired E-Stop.')
+
+            time.sleep(1.0)
 
             # Power on and Stand Robot
             self.robot.power_on(timeout_sec=20)
@@ -62,7 +75,6 @@ class SpotROS2Driver(Node):
 
             blocking_stand(self.command_client, timeout_sec=10)
             self.get_logger().info('Robot standing.')
-            time.sleep(3)
 
         except Exception as e:
             self.get_logger().error(f'Failed to connect to the robot: {e}')
@@ -115,6 +127,11 @@ class SpotROS2Driver(Node):
         if self.robot and self.robot.is_powered_on():
             self.robot.power_off(cut_immediately=False, timeout_sec=20)
             print('Robot powered off.')
+
+        # Release the E-Stop.
+        if self.estop_keep_alive:
+            self.estop_keep_alive.shutdown()
+            print('E-Stop released.')
 
         if self.lease_keep_alive:
             self.lease_keep_alive.shutdown()
