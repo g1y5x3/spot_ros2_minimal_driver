@@ -43,6 +43,8 @@ def generate_launch_description():
         parameters=[{
             'hostname': hostname,
         }],
+        sigterm_timeout=LaunchConfiguration('sigterm_timeout', default='30'),
+        sigkill_timeout=LaunchConfiguration('sigkill_timeout', default='30'),
     )
 
     # RViz node with conditional launch
