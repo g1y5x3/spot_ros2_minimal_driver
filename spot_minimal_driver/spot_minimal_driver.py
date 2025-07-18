@@ -1,40 +1,45 @@
+"""A minimal ROS 2 driver for Boston Dynamics Spot robot."""
+
 import time
+from typing import Optional
 
 # ROS 2 imports
+
 import rclpy
 from rclpy.node import Node
 from tf2_ros import TransformBroadcaster
 from geometry_msgs.msg import TransformStamped, Twist
-from nav_msgs.msg import Odometry
 
 # Boston Dynamics SDK imports
 import bosdyn.client
 import bosdyn.client.util
 import bosdyn.client.lease
+from bosdyn.client import RpcError, ResponseError
+from bosdyn.client.lease import Error as LeaseError
 from bosdyn.client.lease import LeaseClient, LeaseKeepAlive
 from bosdyn.client.estop import EstopClient, EstopEndpoint, EstopKeepAlive
 from bosdyn.client.robot_state import RobotStateClient
 from bosdyn.client.robot_command import RobotCommandBuilder, RobotCommandClient, blocking_stand
 from bosdyn.client.frame_helpers import GRAV_ALIGNED_BODY_FRAME_NAME, ODOM_FRAME_NAME, get_a_tform_b
+from bosdyn.api.geometry_pb2 import SE3Pose
 
 
 class SpotROS2Driver(Node):
     """A minimal ROS 2 driver for Boston Dynamics Spot robot."""
 
     def __init__(self):
+        """Initialize the Spot ROS 2 driver node."""
         super().__init__('spot_driver_node')
 
         self.declare_parameter('hostname', '192.168.80.3')
         self.hostname = self.get_parameter('hostname').get_parameter_value().string_value
         # TODO: Add parameter for robot username and password if needed
 
-        self.robot = None
-        self.lease_keep_alive = None
-        self.estop_keep_alive = None
-
-        # ROS 2 publishers and subscribers
-        self.tf_broadcaster = TransformBroadcaster(self)
-        self.cmd_vel_subscriber = self.create_subscription(Twist, 'cmd_vel', self.cmd_vel_callback, 10)
+        self.robot: Optional[bosdyn.client.robot.Robot] = None
+        self.lease_keep_alive: Optional[LeaseKeepAlive] = None
+        self.estop_keep_alive: Optional[EstopKeepAlive] = None
+        self.robot_state_client: Optional[RobotStateClient] = None
+        self.command_client: Optional[RobotCommandClient] = None
 
         try:
             # Robot initialization
@@ -47,7 +52,7 @@ class SpotROS2Driver(Node):
             assert not self.robot.is_estopped(), 'Robot is estopped. Please use an external E-Stop client, ' \
                                                  'such as the estop SDK example, to configure E-Stop.'
 
-            self.get_logger().info(f'Successfully authenticated and connected to the robot.')
+            self.get_logger().info('Successfully authenticated and connected to the robot.')
 
             # Create SDK clients
             self.robot_state_client = self.robot.ensure_client(RobotStateClient.default_service_name)
@@ -76,9 +81,13 @@ class SpotROS2Driver(Node):
             blocking_stand(self.command_client, timeout_sec=10)
             self.get_logger().info('Robot standing.')
 
-        except Exception as e:
+        except (RpcError, ResponseError, LeaseError) as e:
             self.get_logger().error(f'Failed to connect to the robot: {e}')
             raise
+
+        # ROS 2 publishers and subscribers
+        self.tf_broadcaster = TransformBroadcaster(self)
+        self.cmd_vel_subscriber = self.create_subscription(Twist, 'cmd_vel', self.cmd_vel_callback, 10)
 
         # Main Loop
         self.timer = self.create_timer(0.1, self.timer_callback)
@@ -90,7 +99,7 @@ class SpotROS2Driver(Node):
                                         ODOM_FRAME_NAME, GRAV_ALIGNED_BODY_FRAME_NAME)
         self.publish_transform(odom_tfrom_body)
 
-    def publish_transform(self, odom_tfrom_body):
+    def publish_transform(self, odom_tfrom_body: SE3Pose):
         """Publish the transform from ODOM to BODY frame."""
         t = TransformStamped()
         # TODO: sync with the robot's internal time
@@ -108,7 +117,7 @@ class SpotROS2Driver(Node):
         self.tf_broadcaster.sendTransform(t)
 
     def cmd_vel_callback(self, msg: Twist):
-        """Callback for the /cmd_vel topic."""
+        """Convert a Twist message to a robot velocity command and send it."""
         v_x, v_y, v_rot = msg.linear.x, msg.linear.y, msg.angular.z
 
         command = RobotCommandBuilder.synchro_velocity_command(v_x=v_x, v_y=v_y, v_rot=v_rot)
@@ -118,7 +127,7 @@ class SpotROS2Driver(Node):
             # Send the command to the robot
             self.command_client.robot_command(command, end_time_secs=end_time)
             self.get_logger().debug(f'Sent velocity command: v_x={v_x}, v_y={v_y}, v_rot={v_rot}')
-        except Exception as e:
+        except (RpcError, ResponseError) as e:
             self.get_logger().error(f'Failed to send velocity command: {e}')
 
     def shutdown(self):
@@ -139,18 +148,20 @@ class SpotROS2Driver(Node):
 
 
 def main(args=None):
+    """Initialize and run the Spot ROS 2 driver node."""
     rclpy.init(args=args)
     spot_driver_node = None
 
     try:
         spot_driver_node = SpotROS2Driver()
-        # Only spin if the node was successfully created (no exceptions in __init__)
         if rclpy.ok():
             rclpy.spin(spot_driver_node)
-    except (KeyboardInterrupt, Exception) as e:
+    except KeyboardInterrupt:
         if spot_driver_node:
-            # ros2 context could be exited by this point, use get_logger() might fail
-            print(f'Shutting down the Robot due to {type(e).__name__}.')
+            print('Shutting down the Robot due to KeyboardInterrupt.')
+    except (RpcError, ResponseError, LeaseError) as e:
+        if spot_driver_node:
+            print(f'Shutting down the Robot due to Spot-SDK error: {e}')
     finally:
         if spot_driver_node:
             spot_driver_node.shutdown()

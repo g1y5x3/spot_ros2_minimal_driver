@@ -1,3 +1,5 @@
+"""Setup script for the Spot Minimal Driver package."""
+
 from glob import glob
 from setuptools import find_packages, setup
 
@@ -15,7 +17,10 @@ setup(
         ('share/' + package_name + '/config', glob('config/*.rviz')),
         ('share/' + package_name + '/config', glob('config/*.yaml')),
     ],
-    install_requires=['setuptools', 'bosdyn-client', 'bosdyn-api', 'bosdyn-core'],
+    install_requires=['setuptools',
+                      'bosdyn-client',
+                      'bosdyn-api',
+                      'bosdyn-core'],
     zip_safe=True,
     maintainer='Yixiang Gao',
     maintainer_email='ygao@missouri.edu',
