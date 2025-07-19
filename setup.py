@@ -1,6 +1,7 @@
 """Setup script for the Spot Minimal Driver package."""
 
 from glob import glob
+
 from setuptools import find_packages, setup
 
 package_name = 'spot_minimal_driver'

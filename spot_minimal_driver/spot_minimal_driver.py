@@ -3,24 +3,24 @@
 import time
 from typing import Optional
 
-# ROS 2 imports
-import rclpy
-from rclpy.node import Node
-from tf2_ros import TransformBroadcaster
-from geometry_msgs.msg import TransformStamped, Twist
-
-# Boston Dynamics SDK imports
 import bosdyn.client
-import bosdyn.client.util
 import bosdyn.client.lease
-from bosdyn.client import RpcError, ResponseError
+import bosdyn.client.util
+from bosdyn.api.geometry_pb2 import SE3Pose
+from bosdyn.client import ResponseError, RpcError
+from bosdyn.client.estop import EstopClient, EstopEndpoint, EstopKeepAlive
+from bosdyn.client.frame_helpers import GRAV_ALIGNED_BODY_FRAME_NAME, ODOM_FRAME_NAME, get_a_tform_b
 from bosdyn.client.lease import Error as LeaseError
 from bosdyn.client.lease import LeaseClient, LeaseKeepAlive
-from bosdyn.client.estop import EstopClient, EstopEndpoint, EstopKeepAlive
-from bosdyn.client.robot_state import RobotStateClient
 from bosdyn.client.robot_command import RobotCommandBuilder, RobotCommandClient, blocking_stand
-from bosdyn.client.frame_helpers import GRAV_ALIGNED_BODY_FRAME_NAME, ODOM_FRAME_NAME, get_a_tform_b
-from bosdyn.api.geometry_pb2 import SE3Pose
+from bosdyn.client.robot_state import RobotStateClient
+
+from geometry_msgs.msg import TransformStamped, Twist
+
+import rclpy
+from rclpy.node import Node
+
+from tf2_ros import TransformBroadcaster
 
 
 class SpotROS2Driver(Node):
