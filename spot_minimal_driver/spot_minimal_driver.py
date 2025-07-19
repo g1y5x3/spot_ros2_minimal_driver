@@ -1,10 +1,23 @@
+# Copyright 2025 Yixiang Gao
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """A minimal ROS 2 driver for Boston Dynamics Spot robot."""
 
 import time
 from typing import Optional
 
 import bosdyn.client
-import bosdyn.client.lease
 import bosdyn.client.util
 from bosdyn.api.geometry_pb2 import SE3Pose
 from bosdyn.client import ResponseError, RpcError
@@ -98,7 +111,7 @@ class SpotROS2Driver(Node):
                                         ODOM_FRAME_NAME, GRAV_ALIGNED_BODY_FRAME_NAME)
         self.publish_transform(odom_tfrom_body)
 
-    def publish_transform(self, odom_tfrom_body: SE3Pose):
+    def publish_transform(self, odom_tfrom_body: SE3Pose):  # type: ignore
         """Publish the transform from ODOM to BODY frame."""
         t = TransformStamped()
         # TODO: sync with the robot's internal time
