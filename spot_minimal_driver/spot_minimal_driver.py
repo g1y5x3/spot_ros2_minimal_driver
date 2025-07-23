@@ -20,6 +20,7 @@ from typing import Optional
 import bosdyn.client
 import bosdyn.client.util
 from bosdyn.api.geometry_pb2 import SE3Pose
+from bosdyn.api.robot_state_pb2 import RobotState
 from bosdyn.client import ResponseError, RpcError
 from bosdyn.client.estop import EstopClient, EstopEndpoint, EstopKeepAlive
 from bosdyn.client.frame_helpers import GRAV_ALIGNED_BODY_FRAME_NAME, ODOM_FRAME_NAME, get_a_tform_b
@@ -102,13 +103,16 @@ class SpotROS2Driver(Node):
         self.cmd_vel_subscriber = self.create_subscription(Twist, 'cmd_vel', self.cmd_vel_callback, 10)
 
         # Main Loop
-        self.timer = self.create_timer(0.1, self.timer_callback)
+        self.timer = self.create_timer(0.3, self.timer_callback)
 
     def timer_callback(self):
         """Periodic publish robot data (if connected)."""
-        robot_state = self.robot_state_client.get_robot_state()
+        robot_state: RobotState = self.robot_state_client.get_robot_state()
         odom_tfrom_body = get_a_tform_b(robot_state.kinematic_state.transforms_snapshot,
                                         ODOM_FRAME_NAME, GRAV_ALIGNED_BODY_FRAME_NAME)
+
+        # TODO: Read internal robot inertial measurement and publish it but it's blocked by the Joint API license.
+
         self.publish_transform(odom_tfrom_body)
 
     def publish_transform(self, odom_tfrom_body: SE3Pose):  # type: ignore
