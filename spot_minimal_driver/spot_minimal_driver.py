@@ -14,14 +14,16 @@
 
 """A minimal ROS 2 driver for Boston Dynamics Spot robot."""
 
+import math
 import time
 from typing import Optional
 
 import bosdyn.client
 import bosdyn.client.util
+from bosdyn.api.basic_command_pb2 import RobotCommandFeedbackStatus
 from bosdyn.api.geometry_pb2 import SE3Pose
 from bosdyn.api.robot_state_pb2 import RobotState
-from bosdyn.client import ResponseError, RpcError
+from bosdyn.client import ResponseError, RpcError, math_helpers
 from bosdyn.client.estop import EstopClient, EstopEndpoint, EstopKeepAlive
 from bosdyn.client.frame_helpers import GRAV_ALIGNED_BODY_FRAME_NAME, ODOM_FRAME_NAME, get_a_tform_b
 from bosdyn.client.lease import Error as LeaseError
@@ -32,7 +34,11 @@ from bosdyn.client.robot_state import RobotStateClient
 from geometry_msgs.msg import TransformStamped, Twist
 
 import rclpy
+from rclpy.action import ActionServer
+from rclpy.action.server import ServerGoalHandle
 from rclpy.node import Node
+
+from spot_action.action import NavigateTo
 
 from tf2_ros import TransformBroadcaster
 
@@ -105,6 +111,61 @@ class SpotROS2Driver(Node):
         # Main Loop
         self.timer = self.create_timer(0.3, self.timer_callback)
 
+        # Action server initialization
+        self._action_server = ActionServer(self, NavigateTo, 'navigate_to', execute_callback=self.execute_callback)
+
+    def execute_callback(self, goal_handle: ServerGoalHandle):
+        """Execute the NavigateTo action."""
+        goal = goal_handle.request
+        self.get_logger().info(f'Executing goal: x={goal.x}, y={goal.y}, theta={goal.yaw}')
+
+        try:
+            transforms = self.robot_state_client.get_robot_state().kinematic_state.transforms_snapshot
+
+            body_tform_goal = math_helpers.SE2Pose(x=goal.x, y=goal.y, angle=math.radians(goal.yaw))
+            odom_tform_body = get_a_tform_b(transforms, ODOM_FRAME_NAME, GRAV_ALIGNED_BODY_FRAME_NAME)
+            odom_tfrom_goal = odom_tform_body * body_tform_goal
+
+            command = RobotCommandBuilder.synchro_se2_trajectory_point_command(
+                goal_x=odom_tfrom_goal.x,
+                goal_y=odom_tfrom_goal.y,
+                goal_heading=odom_tfrom_goal.angle,
+                frame_name=ODOM_FRAME_NAME)
+
+            end_time = time.time() + 10.0
+            cmd_id = self.command_client.robot_command(command, end_time_secs=end_time)
+
+            # feedback_msg = NavigateTo.Feedback()
+
+            while True:
+                if goal_handle.is_cancel_requested:
+                    goal_handle.canceled()
+                    self.get_logger().info('Goal canceled.')
+                    self.command_client.robot_command(RobotCommandBuilder.stop_command())
+                    return NavigateTo.Result(success=False)
+
+                feedback = self.command_client.robot_command_feedback(cmd_id)
+                mobility_feedback = feedback.feedback.synchronized_feedback.mobility_command_feedback
+
+                if mobility_feedback.status != RobotCommandFeedbackStatus.STATUS_PROCESSING:
+                    self.get_logger().error('Failed to reach the goal.')
+                    goal_handle.abort()
+                    return NavigateTo.Result(success=False)
+
+                # TODO: Add feedback publishing
+
+                traj_feedback = mobility_feedback.se2_trajectory_feedback
+                if (traj_feedback.status == traj_feedback.STATUS_AT_GOAL and traj_feedback.body_movement_status == traj_feedback.BODY_STATUS_SETTLED):
+                    self.get_logger().info('Arrived at the goal.')
+                    goal_handle.succeed()
+                    return NavigateTo.Result(success=True)
+
+                time.sleep(0.2)  # Check status at 5 Hz
+        except (RpcError, ResponseError) as e:
+            self.get_logger().error(f'Error during action execution: {e}')
+            goal_handle.abort()
+            return NavigateTo.Result(success=False)
+
     def timer_callback(self):
         """Periodic publish robot data (if connected)."""
         robot_state: RobotState = self.robot_state_client.get_robot_state()
@@ -137,10 +198,10 @@ class SpotROS2Driver(Node):
         v_x, v_y, v_rot = msg.linear.x, msg.linear.y, msg.angular.z
 
         command = RobotCommandBuilder.synchro_velocity_command(v_x=v_x, v_y=v_y, v_rot=v_rot)
-        end_time = time.time() + 0.5
 
         try:
             # Send the command to the robot
+            end_time = time.time() + 0.5
             self.command_client.robot_command(command, end_time_secs=end_time)
             self.get_logger().debug(f'Sent velocity command: v_x={v_x}, v_y={v_y}, v_rot={v_rot}')
         except (RpcError, ResponseError) as e:
