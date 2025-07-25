@@ -90,7 +90,7 @@ class SpotROS2Driver(Node):
             self.estop_keep_alive = EstopKeepAlive(estop_endpoint)
             self.get_logger().info('Acquired E-Stop.')
 
-            time.sleep(1.0)
+            time.sleep(3.0)
 
             # Power on and Stand Robot
             self.robot.power_on(timeout_sec=20)
@@ -107,21 +107,24 @@ class SpotROS2Driver(Node):
         # ROS 2 publishers and subscribers
         self.tf_broadcaster = TransformBroadcaster(self)
         self.cmd_vel_subscriber = self.create_subscription(Twist, 'cmd_vel', self.cmd_vel_callback, 10)
-
-        # Main Loop
-        self.timer = self.create_timer(0.3, self.timer_callback)
+        self.robot_state_publisher = self.create_timer(0.3, self.publish_robot_state)
 
         # Action server initialization
-        self._action_server = ActionServer(self, NavigateTo, 'navigate_to', execute_callback=self.execute_callback)
+        self._action_server = ActionServer(self, NavigateTo, 'navigate_to', execute_callback=self.navigate_to)
 
-    def execute_callback(self, goal_handle: ServerGoalHandle):
+    def navigate_to(self, goal_handle: ServerGoalHandle):
         """Execute the NavigateTo action."""
         goal = goal_handle.request
         self.get_logger().info(f'Executing goal: x={goal.x}, y={goal.y}, theta={goal.yaw}')
 
+        distance = math.sqrt(goal.x**2 + goal.y**2)
+        max_vel = 1.0  # https://github.com/boston-dynamics/spot-sdk/blob/master/protos/bosdyn/api/spot/robot_command.proto#L66
+        estimated_time = (distance / max_vel) + 5.0  # Add 5 second for safety margin
+
         try:
             transforms = self.robot_state_client.get_robot_state().kinematic_state.transforms_snapshot
 
+            # convert the goal pose from robot body frame to odom frame
             body_tform_goal = math_helpers.SE2Pose(x=goal.x, y=goal.y, angle=math.radians(goal.yaw))
             odom_tform_body = get_se2_a_tform_b(transforms, ODOM_FRAME_NAME, GRAV_ALIGNED_BODY_FRAME_NAME)
             odom_tfrom_goal = odom_tform_body * body_tform_goal
@@ -132,8 +135,7 @@ class SpotROS2Driver(Node):
                 goal_heading=odom_tfrom_goal.angle,
                 frame_name=ODOM_FRAME_NAME)
 
-            end_time = time.time() + 10.0
-            cmd_id = self.command_client.robot_command(command, end_time_secs=end_time)
+            cmd_id = self.command_client.robot_command(command, end_time_secs=time.time() + estimated_time)
 
             # feedback_msg = NavigateTo.Feedback()
 
@@ -160,13 +162,14 @@ class SpotROS2Driver(Node):
                     goal_handle.succeed()
                     return NavigateTo.Result(success=True)
 
-                time.sleep(0.2)  # Check status at 5 Hz
+                time.sleep(0.1)  # Check status at 10 Hz
+
         except (RpcError, ResponseError) as e:
             self.get_logger().error(f'Error during action execution: {e}')
             goal_handle.abort()
             return NavigateTo.Result(success=False)
 
-    def timer_callback(self):
+    def publish_robot_state(self):
         """Periodic publish robot data (if connected)."""
         robot_state: RobotState = self.robot_state_client.get_robot_state()
         odom_tfrom_body = get_a_tform_b(robot_state.kinematic_state.transforms_snapshot,
@@ -201,8 +204,7 @@ class SpotROS2Driver(Node):
 
         try:
             # Send the command to the robot
-            end_time = time.time() + 0.5
-            self.command_client.robot_command(command, end_time_secs=end_time)
+            self.command_client.robot_command(command, end_time_secs=time.time() + 0.5)
             self.get_logger().debug(f'Sent velocity command: v_x={v_x}, v_y={v_y}, v_rot={v_rot}')
         except (RpcError, ResponseError) as e:
             self.get_logger().error(f'Failed to send velocity command: {e}')
