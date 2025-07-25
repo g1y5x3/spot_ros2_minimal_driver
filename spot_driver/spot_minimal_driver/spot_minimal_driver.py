@@ -25,7 +25,7 @@ from bosdyn.api.geometry_pb2 import SE3Pose
 from bosdyn.api.robot_state_pb2 import RobotState
 from bosdyn.client import ResponseError, RpcError, math_helpers
 from bosdyn.client.estop import EstopClient, EstopEndpoint, EstopKeepAlive
-from bosdyn.client.frame_helpers import GRAV_ALIGNED_BODY_FRAME_NAME, ODOM_FRAME_NAME, get_a_tform_b
+from bosdyn.client.frame_helpers import GRAV_ALIGNED_BODY_FRAME_NAME, ODOM_FRAME_NAME, get_a_tform_b, get_se2_a_tform_b
 from bosdyn.client.lease import Error as LeaseError
 from bosdyn.client.lease import LeaseClient, LeaseKeepAlive
 from bosdyn.client.robot_command import RobotCommandBuilder, RobotCommandClient, blocking_stand
@@ -123,7 +123,7 @@ class SpotROS2Driver(Node):
             transforms = self.robot_state_client.get_robot_state().kinematic_state.transforms_snapshot
 
             body_tform_goal = math_helpers.SE2Pose(x=goal.x, y=goal.y, angle=math.radians(goal.yaw))
-            odom_tform_body = get_a_tform_b(transforms, ODOM_FRAME_NAME, GRAV_ALIGNED_BODY_FRAME_NAME)
+            odom_tform_body = get_se2_a_tform_b(transforms, ODOM_FRAME_NAME, GRAV_ALIGNED_BODY_FRAME_NAME)
             odom_tfrom_goal = odom_tform_body * body_tform_goal
 
             command = RobotCommandBuilder.synchro_se2_trajectory_point_command(
