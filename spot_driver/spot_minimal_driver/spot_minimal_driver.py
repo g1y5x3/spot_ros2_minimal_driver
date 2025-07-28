@@ -195,9 +195,9 @@ class SpotROS2Driver(Node):
             print("Cannot see fiducial_200")
         #
 
-        odom_tform_fiducial = tform_body_fiducial * odom_tfrom_body
+        odom_tform_fiducial = odom_tfrom_body * tform_body_fiducial
         odom_tform_fiducial = odom_tform_fiducial.inverse()
-        self.publish_transform(odom_tform_fiducial, 'filtered_fiducial_200', 'odom')
+        self.publish_transform(odom_tform_fiducial, 'fiducial_200_fixed', 'odom')
 
     def publish_transform(self, tform: SE3Pose, header: str, child: str):  # type: ignore
         '''
