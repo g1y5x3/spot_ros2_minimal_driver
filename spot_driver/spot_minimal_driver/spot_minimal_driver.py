@@ -42,6 +42,9 @@ from spot_action.action import NavigateTo
 
 from tf2_ros import TransformBroadcaster
 
+#
+from bosdyn.client.world_object import WorldObjectClient, world_object_pb2
+#
 
 class SpotROS2Driver(Node):
     """A minimal ROS 2 driver for Boston Dynamics Spot robot."""
@@ -59,6 +62,7 @@ class SpotROS2Driver(Node):
         self.estop_keep_alive: Optional[EstopKeepAlive] = None
         self.robot_state_client: Optional[RobotStateClient] = None
         self.command_client: Optional[RobotCommandClient] = None
+        self.world_object_client: Optional[WorldObjectClient] = None
 
         try:
             # Robot initialization
@@ -78,6 +82,7 @@ class SpotROS2Driver(Node):
             self.command_client = self.robot.ensure_client(RobotCommandClient.default_service_name)
             lease_client = self.robot.ensure_client(LeaseClient.default_service_name)
             estop_client = self.robot.ensure_client(EstopClient.default_service_name)
+            self.world_object_client = self.robot.ensure_client(WorldObjectClient.default_service_name)
             self.get_logger().info('Robot clients created.')
 
             # Lease management
@@ -177,9 +182,25 @@ class SpotROS2Driver(Node):
 
         # TODO: Read internal robot inertial measurement and publish it but it's blocked by the Joint API license.
 
-        self.publish_transform(odom_tfrom_body)
+        self.publish_transform(odom_tfrom_body, 'odom', 'base_link')
 
-    def publish_transform(self, odom_tfrom_body: SE3Pose):  # type: ignore
+	    #
+        try:
+            request_fiducials = [world_object_pb2.WORLD_OBJECT_APRILTAG] #Only list fiducial/apriltags
+            fiducial_objects = self.world_object_client.list_world_objects(object_type=request_fiducials).world_objects
+
+            tform_body_fiducial = get_a_tform_b(fiducial_objects[0].transforms_snapshot, 'body', 'filtered_fiducial_200')
+            self.publish_transform(tform_body_fiducial, 'base_link', 'filtered_fiducial_200')
+        except:
+            print("Cannot see fiducial_200")
+        #
+
+        odom_tform_fiducial = tform_body_fiducial * odom_tfrom_body
+        odom_tform_fiducial = odom_tform_fiducial.inverse()
+        self.publish_transform(odom_tform_fiducial, 'filtered_fiducial_200', 'odom')
+
+    def publish_transform(self, tform: SE3Pose, header: str, child: str):  # type: ignore
+        '''
         """Publish the transform from ODOM to BODY frame."""
         t = TransformStamped()
         # TODO: sync with the robot's internal time
@@ -193,6 +214,20 @@ class SpotROS2Driver(Node):
         t.transform.rotation.y = odom_tfrom_body.rotation.y
         t.transform.rotation.z = odom_tfrom_body.rotation.z
         t.transform.rotation.w = odom_tfrom_body.rotation.w
+        '''
+        '''Publish transform'''
+        t = TransformStamped()
+        # TODO: sync with the robot's internal time
+        t.header.stamp = self.get_clock().now().to_msg()
+        t.header.frame_id = header
+        t.child_frame_id = child
+        t.transform.translation.x = tform.position.x
+        t.transform.translation.y = tform.position.y
+        t.transform.translation.z = tform.position.z
+        t.transform.rotation.x = tform.rotation.x
+        t.transform.rotation.y = tform.rotation.y
+        t.transform.rotation.z = tform.rotation.z
+        t.transform.rotation.w = tform.rotation.w
 
         self.tf_broadcaster.sendTransform(t)
 
