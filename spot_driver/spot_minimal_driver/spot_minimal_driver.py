@@ -40,7 +40,7 @@ from rclpy.node import Node
 
 from spot_action.action import NavigateTo
 
-from tf2_ros import TransformBroadcaster
+from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 
 #
 from bosdyn.client.world_object import WorldObjectClient, world_object_pb2
@@ -112,7 +112,8 @@ class SpotROS2Driver(Node):
             raise
 
         # ROS 2 publishers and subscribers
-        self.tf_broadcaster = TransformBroadcaster(self)
+        self.s_tf_broadcaster = StaticTransformBroadcaster(self)
+        self.d_tf_broadcaster = TransformBroadcaster(self)
         self.cmd_vel_subscriber = self.create_subscription(Twist, 'cmd_vel', self.cmd_vel_callback, 10)
         self.robot_state_publisher = self.create_timer(0.3, self.publish_robot_state)
 
@@ -125,11 +126,14 @@ class SpotROS2Driver(Node):
             self.handle_get_transform
         )
 
-    def handle_get_transform(self, request, response, odom_tfrom_body):
+    def handle_get_transform(self, request, response):
         request_fiducials = [world_object_pb2.WORLD_OBJECT_APRILTAG] #Only list fiducial/apriltags
         fiducial_objects = self.world_object_client.list_world_objects(object_type=request_fiducials).world_objects
         tform_body_fiducial = get_a_tform_b(fiducial_objects[0].transforms_snapshot, 'body', 'filtered_fiducial_200')
 
+        robot_state: RobotState = self.robot_state_client.get_robot_state()
+        odom_tfrom_body = get_a_tform_b(robot_state.kinematic_state.transforms_snapshot,
+                                        ODOM_FRAME_NAME, GRAV_ALIGNED_BODY_FRAME_NAME)
         tform = odom_tfrom_body * tform_body_fiducial
         tform = tform.inverse()
         
@@ -147,7 +151,7 @@ class SpotROS2Driver(Node):
         t.transform.rotation.z = tform.rotation.z
         t.transform.rotation.w = tform.rotation.w
 
-        self.tf_broadcaster.sendTransform(t)
+        self.s_tf_broadcaster.sendTransform(t)
         response.transform = t
         return response
 
@@ -263,7 +267,7 @@ class SpotROS2Driver(Node):
         t.transform.rotation.z = tform.rotation.z
         t.transform.rotation.w = tform.rotation.w
 
-        self.tf_broadcaster.sendTransform(t)
+        self.d_tf_broadcaster.sendTransform(t)
 
     def cmd_vel_callback(self, msg: Twist):
         """Convert a Twist message to a robot velocity command and send it."""
