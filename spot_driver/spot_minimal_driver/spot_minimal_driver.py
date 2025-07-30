@@ -21,17 +21,19 @@ from typing import Optional
 import bosdyn.client
 import bosdyn.client.util
 from bosdyn.api.basic_command_pb2 import RobotCommandFeedbackStatus
-from bosdyn.api.geometry_pb2 import SE3Pose
 from bosdyn.api.robot_state_pb2 import RobotState
-from bosdyn.client import ResponseError, RpcError, math_helpers
+from bosdyn.client import ResponseError, RpcError
 from bosdyn.client.estop import EstopClient, EstopEndpoint, EstopKeepAlive
-from bosdyn.client.frame_helpers import GRAV_ALIGNED_BODY_FRAME_NAME, ODOM_FRAME_NAME, get_a_tform_b, get_se2_a_tform_b
+from bosdyn.client.frame_helpers import GRAV_ALIGNED_BODY_FRAME_NAME, ODOM_FRAME_NAME, VISION_FRAME_NAME, get_a_tform_b, get_se2_a_tform_b
 from bosdyn.client.lease import Error as LeaseError
 from bosdyn.client.lease import LeaseClient, LeaseKeepAlive
+from bosdyn.client.math_helpers import SE2Pose, SE3Pose, SE3Velocity
 from bosdyn.client.robot_command import RobotCommandBuilder, RobotCommandClient, blocking_stand
 from bosdyn.client.robot_state import RobotStateClient
 
 from geometry_msgs.msg import TransformStamped, Twist
+
+from nav_msgs.msg import Odometry
 
 import rclpy
 from rclpy.action import ActionServer
@@ -53,6 +55,7 @@ class SpotROS2Driver(Node):
         self.declare_parameter('hostname', '192.168.80.3')
         self.hostname = self.get_parameter('hostname').get_parameter_value().string_value
         # TODO: Add parameter for robot username and password if needed
+        self.declare_parameter('odometry_frame', 'odom')
 
         self.robot: Optional[bosdyn.client.robot.Robot] = None
         self.lease_keep_alive: Optional[LeaseKeepAlive] = None
@@ -106,8 +109,9 @@ class SpotROS2Driver(Node):
 
         # ROS 2 publishers and subscribers
         self.tf_broadcaster = TransformBroadcaster(self)
+        self.odom_publisher = self.create_publisher(Odometry, 'odom', 10)
         self.cmd_vel_subscriber = self.create_subscription(Twist, 'cmd_vel', self.cmd_vel_callback, 10)
-        self.robot_state_publisher = self.create_timer(0.3, self.publish_robot_state)
+        self.robot_state_publisher = self.create_timer(0.1, self.publish_robot_state)
 
         # Action server initialization
         self._action_server = ActionServer(self, NavigateTo, 'navigate_to', execute_callback=self.navigate_to)
@@ -125,7 +129,7 @@ class SpotROS2Driver(Node):
             transforms = self.robot_state_client.get_robot_state().kinematic_state.transforms_snapshot
 
             # convert the goal pose from robot body frame to odom frame
-            body_tform_goal = math_helpers.SE2Pose(x=goal.x, y=goal.y, angle=math.radians(goal.yaw))
+            body_tform_goal = SE2Pose(x=goal.x, y=goal.y, angle=math.radians(goal.yaw))
             odom_tform_body = get_se2_a_tform_b(transforms, ODOM_FRAME_NAME, GRAV_ALIGNED_BODY_FRAME_NAME)
             odom_tfrom_goal = odom_tform_body * body_tform_goal
 
@@ -174,25 +178,44 @@ class SpotROS2Driver(Node):
         robot_state: RobotState = self.robot_state_client.get_robot_state()
         odom_tfrom_body = get_a_tform_b(robot_state.kinematic_state.transforms_snapshot,
                                         ODOM_FRAME_NAME, GRAV_ALIGNED_BODY_FRAME_NAME)
+        self.publish_transform(odom_tfrom_body, 'odom', 'base_link')
+
+        odom_vel_of_body = robot_state.kinematic_state.velocity_of_body_in_odom
+        self.publish_odometry(odom_tfrom_body, odom_vel_of_body)
 
         # TODO: Read internal robot inertial measurement and publish it but it's blocked by the Joint API license.
 
-        self.publish_transform(odom_tfrom_body)
+    def publish_odometry(self, odom_tfrom_body: SE3Pose, odom_vel_of_body: SE3Velocity):
+        """Publish the odometry data."""
+        odom_msg = Odometry()
+        odom_msg.header.stamp = self.get_clock().now().to_msg()
+        odom_msg.header.frame_id = 'odom'
+        odom_msg.child_frame_id = 'base_link'
 
-    def publish_transform(self, odom_tfrom_body: SE3Pose):  # type: ignore
+        odom_msg.pose.pose.position.x = odom_tfrom_body.position.x
+        odom_msg.pose.pose.position.y = odom_tfrom_body.position.y
+        odom_msg.pose.pose.position.z = odom_tfrom_body.position.z
+        odom_msg.pose.pose.orientation.x = odom_tfrom_body.rotation.x
+        odom_msg.pose.pose.orientation.y = odom_tfrom_body.rotation.y
+        odom_msg.pose.pose.orientation.z = odom_tfrom_body.rotation.z
+        odom_msg.pose.pose.orientation.w = odom_tfrom_body.rotation.w
+
+        self.odom_publisher.publish(odom_msg)
+
+    def publish_transform(self, tfrom: SE3Pose, header: str, child: str):  # type: ignore
         """Publish the transform from ODOM to BODY frame."""
         t = TransformStamped()
         # TODO: sync with the robot's internal time
         t.header.stamp = self.get_clock().now().to_msg()
-        t.header.frame_id = 'odom'
-        t.child_frame_id = 'base_link'
-        t.transform.translation.x = odom_tfrom_body.position.x
-        t.transform.translation.y = odom_tfrom_body.position.y
-        t.transform.translation.z = odom_tfrom_body.position.z
-        t.transform.rotation.x = odom_tfrom_body.rotation.x
-        t.transform.rotation.y = odom_tfrom_body.rotation.y
-        t.transform.rotation.z = odom_tfrom_body.rotation.z
-        t.transform.rotation.w = odom_tfrom_body.rotation.w
+        t.header.frame_id = header
+        t.child_frame_id = child
+        t.transform.translation.x = tfrom.position.x
+        t.transform.translation.y = tfrom.position.y
+        t.transform.translation.z = tfrom.position.z
+        t.transform.rotation.x = tfrom.rotation.x
+        t.transform.rotation.y = tfrom.rotation.y
+        t.transform.rotation.z = tfrom.rotation.z
+        t.transform.rotation.w = tfrom.rotation.w
 
         self.tf_broadcaster.sendTransform(t)
 
