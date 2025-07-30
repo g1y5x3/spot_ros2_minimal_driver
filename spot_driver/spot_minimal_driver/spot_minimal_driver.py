@@ -40,7 +40,7 @@ from rclpy.action import ActionServer
 from rclpy.action.server import ServerGoalHandle
 from rclpy.node import Node
 
-from spot_action.action import NavigateTo
+from spot_action.action import MoveRelativeXY
 
 from tf2_ros import TransformBroadcaster
 
@@ -122,9 +122,9 @@ class SpotROS2Driver(Node):
         self.robot_state_publisher = self.create_timer(0.1, self.publish_robot_state)
 
         # Action server initialization
-        self._action_server = ActionServer(self, NavigateTo, 'navigate_to', execute_callback=self.navigate_to)
+        self._action_server = ActionServer(self, MoveRelativeXY, 'move_relative_xy', execute_callback=self.move_relative_xy)
 
-    def navigate_to(self, goal_handle: ServerGoalHandle):
+    def move_relative_xy(self, goal_handle: ServerGoalHandle):
         """Execute the NavigateTo action."""
         goal = goal_handle.request
         self.get_logger().info(f'Executing goal: x={goal.x}, y={goal.y}, theta={goal.yaw}')
