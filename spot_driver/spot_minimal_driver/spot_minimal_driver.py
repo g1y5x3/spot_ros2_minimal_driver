@@ -125,7 +125,7 @@ class SpotROS2Driver(Node):
         self._action_server = ActionServer(self, MoveRelativeXY, 'move_relative_xy', execute_callback=self.move_relative_xy)
 
     def move_relative_xy(self, goal_handle: ServerGoalHandle):
-        """Execute the NavigateTo action."""
+        """Execute the move to relative [x, y, yaw] action."""
         goal = goal_handle.request
         self.get_logger().info(f'Executing goal: x={goal.x}, y={goal.y}, theta={goal.yaw}')
 
@@ -149,14 +149,14 @@ class SpotROS2Driver(Node):
 
             cmd_id = self.command_client.robot_command(command, end_time_secs=time.time() + estimated_time)
 
-            # feedback_msg = NavigateTo.Feedback()
+            # feedback_msg = MoveRelativeXY.Feedback()
 
             while True:
                 if goal_handle.is_cancel_requested:
                     goal_handle.canceled()
                     self.get_logger().info('Goal canceled.')
                     self.command_client.robot_command(RobotCommandBuilder.stop_command())
-                    return NavigateTo.Result(success=False)
+                    return MoveRelativeXY.Result(success=False)
 
                 feedback = self.command_client.robot_command_feedback(cmd_id)
                 mobility_feedback = feedback.feedback.synchronized_feedback.mobility_command_feedback
@@ -164,7 +164,7 @@ class SpotROS2Driver(Node):
                 if mobility_feedback.status != RobotCommandFeedbackStatus.STATUS_PROCESSING:
                     self.get_logger().error('Failed to reach the goal.')
                     goal_handle.abort()
-                    return NavigateTo.Result(success=False)
+                    return MoveRelativeXY.Result(success=False)
 
                 # TODO: Add feedback publishing
 
@@ -172,14 +172,14 @@ class SpotROS2Driver(Node):
                 if (traj_feedback.status == traj_feedback.STATUS_AT_GOAL and traj_feedback.body_movement_status == traj_feedback.BODY_STATUS_SETTLED):
                     self.get_logger().info('Arrived at the goal.')
                     goal_handle.succeed()
-                    return NavigateTo.Result(success=True)
+                    return MoveRelativeXY.Result(success=True)
 
                 time.sleep(0.1)  # Check status at 10 Hz
 
         except (RpcError, ResponseError) as e:
             self.get_logger().error(f'Error during action execution: {e}')
             goal_handle.abort()
-            return NavigateTo.Result(success=False)
+            return MoveRelativeXY.Result(success=False)
 
     def publish_robot_state(self):
         """Periodic publish robot data (if connected)."""
