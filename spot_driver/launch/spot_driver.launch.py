@@ -18,6 +18,12 @@ def generate_launch_description():
         description='IP address of the Spot robot'
     )
 
+    declare_odomframe_arg = DeclareLaunchArgument(
+        'odometry_frame',
+        default_value='odom',
+        description='Odometry frame to use (odom or vision)'
+    )
+
     declare_use_rviz_arg = DeclareLaunchArgument(
         'use_rviz',
         default_value='true',
@@ -32,6 +38,7 @@ def generate_launch_description():
 
     # Get launch configuration values
     hostname = LaunchConfiguration('hostname')
+    odometry_frame = LaunchConfiguration('odometry_frame')
     use_rviz = LaunchConfiguration('use_rviz')
     rviz_config = LaunchConfiguration('rviz_config')
 
@@ -43,6 +50,7 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'hostname': hostname,
+            'odometry_frame': odometry_frame,
         }],
         sigterm_timeout=LaunchConfiguration('sigterm_timeout', default='30'),
         sigkill_timeout=LaunchConfiguration('sigkill_timeout', default='30'),
@@ -70,6 +78,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         declare_hostname_arg,
+        declare_odomframe_arg,
         declare_use_rviz_arg,
         declare_rviz_config_arg,
         nodes_group,

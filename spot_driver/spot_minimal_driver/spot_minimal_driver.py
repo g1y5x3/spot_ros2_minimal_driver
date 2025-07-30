@@ -55,7 +55,14 @@ class SpotROS2Driver(Node):
         self.declare_parameter('hostname', '192.168.80.3')
         self.hostname = self.get_parameter('hostname').get_parameter_value().string_value
         # TODO: Add parameter for robot username and password if needed
+
         self.declare_parameter('odometry_frame', 'odom')
+        odom_param = self.get_parameter('odometry_frame').get_parameter_value().string_value
+        self.get_logger().info(f'Using odometry frame: {odom_param}')
+        if odom_param == 'odom':
+            self.odom_frame = ODOM_FRAME_NAME
+        elif odom_param == 'vision':
+            self.odom_frame = VISION_FRAME_NAME
 
         self.robot: Optional[bosdyn.client.robot.Robot] = None
         self.lease_keep_alive: Optional[LeaseKeepAlive] = None
@@ -130,14 +137,14 @@ class SpotROS2Driver(Node):
 
             # convert the goal pose from robot body frame to odom frame
             body_tform_goal = SE2Pose(x=goal.x, y=goal.y, angle=math.radians(goal.yaw))
-            odom_tform_body = get_se2_a_tform_b(transforms, ODOM_FRAME_NAME, GRAV_ALIGNED_BODY_FRAME_NAME)
+            odom_tform_body = get_se2_a_tform_b(transforms, self.odom_frame, GRAV_ALIGNED_BODY_FRAME_NAME)
             odom_tfrom_goal = odom_tform_body * body_tform_goal
 
             command = RobotCommandBuilder.synchro_se2_trajectory_point_command(
                 goal_x=odom_tfrom_goal.x,
                 goal_y=odom_tfrom_goal.y,
                 goal_heading=odom_tfrom_goal.angle,
-                frame_name=ODOM_FRAME_NAME)
+                frame_name=self.odom_frame)
 
             cmd_id = self.command_client.robot_command(command, end_time_secs=time.time() + estimated_time)
 
@@ -177,20 +184,20 @@ class SpotROS2Driver(Node):
         """Periodic publish robot data (if connected)."""
         robot_state: RobotState = self.robot_state_client.get_robot_state()
         odom_tfrom_body = get_a_tform_b(robot_state.kinematic_state.transforms_snapshot,
-                                        ODOM_FRAME_NAME, GRAV_ALIGNED_BODY_FRAME_NAME)
-        self.publish_transform(odom_tfrom_body, 'odom', 'base_link')
+                                        self.odom_frame, GRAV_ALIGNED_BODY_FRAME_NAME)
+        self.publish_transform(odom_tfrom_body, f'odom_{self.odom_frame}', 'base_link')
 
         odom_vel_of_body = robot_state.kinematic_state.velocity_of_body_in_odom
-        self.publish_odometry(odom_tfrom_body, odom_vel_of_body)
+        self.publish_odometry(odom_tfrom_body, odom_vel_of_body, f'odom_{self.odom_frame}', 'base_link')
 
         # TODO: Read internal robot inertial measurement and publish it but it's blocked by the Joint API license.
 
-    def publish_odometry(self, odom_tfrom_body: SE3Pose, odom_vel_of_body: SE3Velocity):
+    def publish_odometry(self, odom_tfrom_body: SE3Pose, odom_vel_of_body: SE3Velocity, header: str, child: str):
         """Publish the odometry data."""
         odom_msg = Odometry()
         odom_msg.header.stamp = self.get_clock().now().to_msg()
-        odom_msg.header.frame_id = 'odom'
-        odom_msg.child_frame_id = 'base_link'
+        odom_msg.header.frame_id = header
+        odom_msg.child_frame_id = child
 
         odom_msg.pose.pose.position.x = odom_tfrom_body.position.x
         odom_msg.pose.pose.position.y = odom_tfrom_body.position.y
