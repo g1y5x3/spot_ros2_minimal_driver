@@ -38,6 +38,8 @@ from nav_msgs.msg import Odometry
 import rclpy
 from rclpy.action import ActionServer
 from rclpy.action.server import ServerGoalHandle
+from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 
 from spot_action.action import MoveRelativeXY
@@ -119,10 +121,11 @@ class SpotROS2Driver(Node):
         self.tf_broadcaster = TransformBroadcaster(self)
         self.odom_publisher = self.create_publisher(Odometry, 'odom', 10)
         self.cmd_vel_subscriber = self.create_subscription(Twist, 'cmd_vel', self.cmd_vel_callback, 10)
-        self.robot_state_publisher = self.create_timer(0.1, self.publish_robot_state)
+        self.robot_state_publisher = self.create_timer(0.1, self.publish_robot_state, callback_group=ReentrantCallbackGroup())
 
         # Action server initialization
-        self._action_server = ActionServer(self, MoveRelativeXY, 'move_relative_xy', execute_callback=self.move_relative_xy)
+        self._action_server = ActionServer(self, MoveRelativeXY, 'move_relative_xy', execute_callback=self.move_relative_xy,
+                                           callback_group=ReentrantCallbackGroup())
 
     def move_relative_xy(self, goal_handle: ServerGoalHandle):
         """Execute the move to relative [x, y, yaw] action."""
@@ -264,8 +267,10 @@ def main(args=None):
 
     try:
         spot_driver_node = SpotROS2Driver()
+        executor = MultiThreadedExecutor()
+        executor.add_node(spot_driver_node)
         if rclpy.ok():
-            rclpy.spin(spot_driver_node)
+            executor.spin()
     except KeyboardInterrupt:
         if spot_driver_node:
             print('Shutting down the Robot due to KeyboardInterrupt.')
@@ -273,6 +278,8 @@ def main(args=None):
         if spot_driver_node:
             print(f'Shutting down the Robot due to Spot-SDK error: {e}')
     finally:
+        if executor:
+            executor.shutdown()
         if spot_driver_node:
             spot_driver_node.shutdown()
             spot_driver_node.destroy_node()
