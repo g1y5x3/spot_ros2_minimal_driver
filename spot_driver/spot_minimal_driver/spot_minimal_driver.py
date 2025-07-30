@@ -56,13 +56,14 @@ class SpotROS2Driver(Node):
         self.hostname = self.get_parameter('hostname').get_parameter_value().string_value
         # TODO: Add parameter for robot username and password if needed
 
+        # load the user-defined odometry frame
         self.declare_parameter('odometry_frame', 'odom')
-        odom_param = self.get_parameter('odometry_frame').get_parameter_value().string_value
-        self.get_logger().info(f'Using odometry frame: {odom_param}')
-        if odom_param == 'odom':
+        self.odom_frame = self.get_parameter('odometry_frame').get_parameter_value().string_value
+        if self.odom_frame not in [ODOM_FRAME_NAME, VISION_FRAME_NAME]:
+            self.get_logger().error(f'Invalid odometry frame: {self.odom_frame}. Using default "odom".')
             self.odom_frame = ODOM_FRAME_NAME
-        elif odom_param == 'vision':
-            self.odom_frame = VISION_FRAME_NAME
+        else:
+            self.get_logger().info(f'Using odometry frame: {self.odom_frame}')
 
         self.robot: Optional[bosdyn.client.robot.Robot] = None
         self.lease_keep_alive: Optional[LeaseKeepAlive] = None
