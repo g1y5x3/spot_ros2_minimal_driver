@@ -46,6 +46,9 @@ from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 from bosdyn.client.world_object import WorldObjectClient, world_object_pb2
 
 from spot_srvs.srv import GetTransform
+
+from scipy.spatial.transform import Rotation as rotation
+
 #
 
 class SpotROS2Driver(Node):
@@ -129,13 +132,16 @@ class SpotROS2Driver(Node):
     def handle_get_transform(self, request, response):
         request_fiducials = [world_object_pb2.WORLD_OBJECT_APRILTAG] #Only list fiducial/apriltags
         fiducial_objects = self.world_object_client.list_world_objects(object_type=request_fiducials).world_objects
+        if not fiducial_objects:
+            self.get_logger().warn('No fiducial detected!')
+            return response
         tform_body_fiducial = get_a_tform_b(fiducial_objects[0].transforms_snapshot, 'body', 'filtered_fiducial_200')
 
         robot_state: RobotState = self.robot_state_client.get_robot_state()
         odom_tfrom_body = get_a_tform_b(robot_state.kinematic_state.transforms_snapshot,
                                         ODOM_FRAME_NAME, GRAV_ALIGNED_BODY_FRAME_NAME)
-        tform = odom_tfrom_body * tform_body_fiducial
-        tform = tform.inverse()
+        tform_odom_fiducial = odom_tfrom_body * tform_body_fiducial
+        tform_fiducial_odom = tform_odom_fiducial.inverse()
         
 
         t = TransformStamped()
@@ -143,13 +149,13 @@ class SpotROS2Driver(Node):
         t.header.stamp = self.get_clock().now().to_msg()
         t.header.frame_id = 'fixed_fiducial_200'
         t.child_frame_id = 'odom'
-        t.transform.translation.x = tform.position.x
-        t.transform.translation.y = tform.position.y
-        t.transform.translation.z = tform.position.z
-        t.transform.rotation.x = tform.rotation.x
-        t.transform.rotation.y = tform.rotation.y
-        t.transform.rotation.z = tform.rotation.z
-        t.transform.rotation.w = tform.rotation.w
+        t.transform.translation.x = tform_fiducial_odom.position.x
+        t.transform.translation.y = tform_fiducial_odom.position.y
+        t.transform.translation.z = tform_fiducial_odom.position.z
+        t.transform.rotation.x = tform_fiducial_odom.rotation.x
+        t.transform.rotation.y = tform_fiducial_odom.rotation.y
+        t.transform.rotation.z = tform_fiducial_odom.rotation.z
+        t.transform.rotation.w = tform_fiducial_odom.rotation.w
 
         self.s_tf_broadcaster.sendTransform(t)
         response.transform = t
@@ -220,23 +226,35 @@ class SpotROS2Driver(Node):
 
         # TODO: Read internal robot inertial measurement and publish it but it's blocked by the Joint API license.
 
+        #self.publish_transform(odom_tfrom_body, 'odom', 'base_link')
+
+        fiducials = self.world_object_client.list_world_objects([world_object_pb2.WORLD_OBJECT_APRILTAG]).world_objects
+        if not fiducials:
+            self.get_logger().warn('No AprilTag fiducials found.')
+            return
+
+        tform_body_fiducial = get_a_tform_b(fiducials[0].transforms_snapshot, 'body', 'filtered_fiducial_200')
+
+        r = rotation.from_euler('z', 90, degrees=True)
+        qx, qy, qz, qw = r.as_quat()
+        q = math_helpers.Quat(x=qx, y=qy, z=qz, w=qw)
+
+        corner_offset = math_helpers.SE3Pose(x=-0.10795, y=0.0,  z=-0.1397, rot=q)
+        tform_fiducial_world = corner_offset
+        tform_world_fiducial = tform_fiducial_world.inverse()
+
+
+        tform_odom_fiducial = odom_tfrom_body * tform_body_fiducial
+        tform_fiducial_odom = tform_odom_fiducial.inverse()
+
+        self.publish_transform(tform_world_fiducial, 'world', 'filtered_fiducial_200')
+        self.publish_transform(tform_fiducial_odom, 'filtered_fiducial_200', 'odom')
         self.publish_transform(odom_tfrom_body, 'odom', 'base_link')
-        '''
-	    #
-        try:
-            request_fiducials = [world_object_pb2.WORLD_OBJECT_APRILTAG] #Only list fiducial/apriltags
-            fiducial_objects = self.world_object_client.list_world_objects(object_type=request_fiducials).world_objects
 
-            tform_body_fiducial = get_a_tform_b(fiducial_objects[0].transforms_snapshot, 'body', 'filtered_fiducial_200')
-            self.publish_transform(tform_body_fiducial, 'base_link', 'filtered_fiducial_200')
-        except:
-            print("Cannot see fiducial_200")
-        #
+        tform_body_corner = tform_body_fiducial * corner_offset
+        tform_corner_body = tform_body_corner.inverse()
+        self.publish_transform(tform_corner_body, 'world', 'base_link')
 
-        odom_tform_fiducial = odom_tfrom_body * tform_body_fiducial
-        odom_tform_fiducial = odom_tform_fiducial.inverse()
-        self.publish_transform(odom_tform_fiducial, 'fiducial_200_fixed', 'odom')
-        '''
     def publish_transform(self, tform: SE3Pose, header: str, child: str):  # type: ignore
         '''
         """Publish the transform from ODOM to BODY frame."""
@@ -318,6 +336,7 @@ def main(args=None):
         if spot_driver_node:
             spot_driver_node.shutdown()
             spot_driver_node.destroy_node()
+        rclpy.shutdown()
 
 
 if __name__ == '__main__':
