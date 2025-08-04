@@ -15,7 +15,7 @@ ros2 service call /get_fiducial_transform spot_srvs/srv/GetTransform "{}"
 ```
 
 ```
-ros2 run tf2_ros static_transform_publisher -0.10795 0.0 0.1397 1.57 0 0 world filtered_fiducial_200
+ros2 run tf2_ros static_transform_publisher -0.10795 0.0 0.1397 -1.57 -1.57 0 world filtered_fiducial_200
 ```
 
 ```
