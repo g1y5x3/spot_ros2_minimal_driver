@@ -130,24 +130,24 @@ class SpotROS2Driver(Node):
         )
 
     def handle_get_transform(self, request, response):
-        request_fiducials = [world_object_pb2.WORLD_OBJECT_APRILTAG] #Only list fiducial/apriltags
-        fiducial_objects = self.world_object_client.list_world_objects(object_type=request_fiducials).world_objects
-        if not fiducial_objects:
-            self.get_logger().warn('No fiducial detected!')
-            return response
-        tform_body_fiducial = get_a_tform_b(fiducial_objects[0].transforms_snapshot, 'body', 'filtered_fiducial_200')
-
         robot_state: RobotState = self.robot_state_client.get_robot_state()
         odom_tfrom_body = get_a_tform_b(robot_state.kinematic_state.transforms_snapshot,
                                         ODOM_FRAME_NAME, GRAV_ALIGNED_BODY_FRAME_NAME)
-        tform_odom_fiducial = odom_tfrom_body * tform_body_fiducial
+
+
+        fiducials = self.world_object_client.list_world_objects([world_object_pb2.WORLD_OBJECT_APRILTAG]).world_objects
+        if not fiducials:
+            self.get_logger().warn('No AprilTag fiducials found.')
+            return
+
+        tform_odom_fiducial = get_a_tform_b(fiducials[0].transforms_snapshot, 'odom', 'filtered_fiducial_200')
+
         tform_fiducial_odom = tform_odom_fiducial.inverse()
-        
 
         t = TransformStamped()
         # TODO: sync with the robot's internal time
         t.header.stamp = self.get_clock().now().to_msg()
-        t.header.frame_id = 'fixed_fiducial_200'
+        t.header.frame_id = 'filtered_fiducial_200'
         t.child_frame_id = 'odom'
         t.transform.translation.x = tform_fiducial_odom.position.x
         t.transform.translation.y = tform_fiducial_odom.position.y
@@ -226,15 +226,14 @@ class SpotROS2Driver(Node):
 
         # TODO: Read internal robot inertial measurement and publish it but it's blocked by the Joint API license.
 
-        #self.publish_transform(odom_tfrom_body, 'odom', 'base_link')
-
+        self.publish_transform(odom_tfrom_body, 'odom', 'base_link')
+        '''
         fiducials = self.world_object_client.list_world_objects([world_object_pb2.WORLD_OBJECT_APRILTAG]).world_objects
         if not fiducials:
             self.get_logger().warn('No AprilTag fiducials found.')
             return
-
-        tform_body_fiducial = get_a_tform_b(fiducials[0].transforms_snapshot, 'body', 'filtered_fiducial_200')
-
+        tform_odom_fiducial = get_a_tform_b(fiducials[0].transforms_snapshot, 'odom', 'filtered_fiducial_200')
+        
         r = rotation.from_euler('z', 90, degrees=True)
         qx, qy, qz, qw = r.as_quat()
         q = math_helpers.Quat(x=qx, y=qy, z=qz, w=qw)
@@ -246,7 +245,7 @@ class SpotROS2Driver(Node):
 
         tform_odom_fiducial = odom_tfrom_body * tform_body_fiducial
         tform_fiducial_odom = tform_odom_fiducial.inverse()
-
+        
         self.publish_transform(tform_world_fiducial, 'world', 'filtered_fiducial_200')
         self.publish_transform(tform_fiducial_odom, 'filtered_fiducial_200', 'odom')
         self.publish_transform(odom_tfrom_body, 'odom', 'base_link')
@@ -254,23 +253,9 @@ class SpotROS2Driver(Node):
         tform_body_corner = tform_body_fiducial * corner_offset
         tform_corner_body = tform_body_corner.inverse()
         self.publish_transform(tform_corner_body, 'world', 'base_link')
+        '''
 
     def publish_transform(self, tform: SE3Pose, header: str, child: str):  # type: ignore
-        '''
-        """Publish the transform from ODOM to BODY frame."""
-        t = TransformStamped()
-        # TODO: sync with the robot's internal time
-        t.header.stamp = self.get_clock().now().to_msg()
-        t.header.frame_id = 'odom'
-        t.child_frame_id = 'base_link'
-        t.transform.translation.x = odom_tfrom_body.position.x
-        t.transform.translation.y = odom_tfrom_body.position.y
-        t.transform.translation.z = odom_tfrom_body.position.z
-        t.transform.rotation.x = odom_tfrom_body.rotation.x
-        t.transform.rotation.y = odom_tfrom_body.rotation.y
-        t.transform.rotation.z = odom_tfrom_body.rotation.z
-        t.transform.rotation.w = odom_tfrom_body.rotation.w
-        '''
         '''Publish transform'''
         t = TransformStamped()
         # TODO: sync with the robot's internal time
