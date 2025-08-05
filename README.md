@@ -21,3 +21,11 @@ ros2 run tf2_ros static_transform_publisher -0.10795 0.0 0.1397 -1.57 -1.57 0 wo
 ```
 ros2 run map_localization map_localizer_node
 ```
+
+```
+ros2 run teleop_twist_keyboard teleop_twist_keyboard
+```
+
+```
+ros2 run nav_goal_listener nav_goal_listener
+```
