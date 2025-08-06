@@ -86,7 +86,8 @@ class SpotROS2Driver(Node):
             # Robot initialization
             sdk = bosdyn.client.create_standard_sdk('SpotROS2DriverClient')
             self.robot = sdk.create_robot(self.hostname)
-            bosdyn.client.util.authenticate(self.robot)
+            #bosdyn.client.util.authenticate(self.robot)
+            self.robot.authenticate('admin', 'jr7oike8y86g')
             self.robot.time_sync.wait_for_sync()
 
             # NOTE: Not sure if this is necessary
@@ -186,7 +187,7 @@ class SpotROS2Driver(Node):
             transforms = self.robot_state_client.get_robot_state().kinematic_state.transforms_snapshot
 
             # convert the goal pose from robot body frame to odom frame
-            body_tform_goal = SE2Pose(x=goal.x, y=goal.y, angle=math.radians(goal.yaw))
+            body_tform_goal = SE2Pose(x=goal.x, y=goal.y, angle=goal.yaw)
             odom_tform_body = get_se2_a_tform_b(transforms, self.odom_frame, GRAV_ALIGNED_BODY_FRAME_NAME)
             odom_tfrom_goal = odom_tform_body * body_tform_goal
 
