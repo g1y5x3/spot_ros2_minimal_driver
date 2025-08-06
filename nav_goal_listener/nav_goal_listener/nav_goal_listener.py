@@ -53,22 +53,8 @@ class NavGoalListener(Node):
         goal_msg.x = transformed_goal.position.x
         goal_msg.y = transformed_goal.position.y
 
-        goal_q = [msg.pose.orientation.x, msg.pose.orientation.y,
-                msg.pose.orientation.z, msg.pose.orientation.w]
-
-        # Orientation of the transform (world -> base_link)
-        tf_q = [transform.transform.rotation.x, transform.transform.rotation.y,
-                transform.transform.rotation.z, transform.transform.rotation.w]
-
-        # Rotate the goal orientation into the robot frame:
-        # robot_q = inverse(tf_q) * goal_q
-        relative_q = quaternion_multiply(
-            quaternion_inverse(tf_q),
-            goal_q
-        )
-
-        q = relative_q
-        yaw = euler_from_quaternion([q[0], q[1], q[2], q[3]])[2]
+        q = transformed_goal.orientation
+        yaw = euler_from_quaternion([q.x, q.y, q.z, q.w])[2]
         goal_msg.yaw = yaw
 
         self.get_logger().info(
