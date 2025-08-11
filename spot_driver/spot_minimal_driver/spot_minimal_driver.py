@@ -82,8 +82,8 @@ class SpotROS2Driver(Node):
             # Robot initialization
             sdk = bosdyn.client.create_standard_sdk("SpotROS2DriverClient")
             self.robot = sdk.create_robot(self.hostname)
-            # bosdyn.client.util.authenticate(self.robot)
-            self.robot.authenticate("admin", "jr7oike8y86g")
+            # NOTE: Must have both BOSDYN_CLIENT_USERNAME and BOSDYN_CLIENT_PASSWORD environment variables set
+            bosdyn.client.util.authenticate(self.robot)
             self.robot.time_sync.wait_for_sync()
 
             # NOTE: Not sure if this is necessary
@@ -127,9 +127,8 @@ class SpotROS2Driver(Node):
             raise
 
         # ROS 2 publishers and subscribers
-        self.s_tf_broadcaster = StaticTransformBroadcaster(self)
-        self.d_tf_broadcaster = TransformBroadcaster(self)
-        # self.tf_broadcaster = TransformBroadcaster(self)
+        self.static_tf_broadcaster = StaticTransformBroadcaster(self)
+        self.tf_broadcaster = TransformBroadcaster(self)
         self.odom_publisher = self.create_publisher(Odometry, "odom", 10)
         self.cmd_vel_subscriber = self.create_subscription(Twist, "cmd_vel", self.cmd_vel_callback, 10)
         self.robot_state_publisher = self.create_timer(
@@ -160,7 +159,7 @@ class SpotROS2Driver(Node):
         t = TransformStamped()
         # TODO: sync with the robot's internal time
         t.header.stamp = self.get_clock().now().to_msg()
-        t.header.frame_id = "filtered_fiducial_200"
+        t.header.frame_id = request.fiducial_name
         t.child_frame_id = f"odom_{self.odom_frame}"
         t.transform.translation.x = tform_fiducial_odom.position.x
         t.transform.translation.y = tform_fiducial_odom.position.y
@@ -170,7 +169,7 @@ class SpotROS2Driver(Node):
         t.transform.rotation.z = tform_fiducial_odom.rotation.z
         t.transform.rotation.w = tform_fiducial_odom.rotation.w
 
-        self.s_tf_broadcaster.sendTransform(t)
+        self.static_tf_broadcaster.sendTransform(t)
         response.transform = t
         return response
 
@@ -282,7 +281,7 @@ class SpotROS2Driver(Node):
         t.transform.rotation.z = tfrom.rotation.z
         t.transform.rotation.w = tfrom.rotation.w
 
-        self.d_tf_broadcaster.sendTransform(t)
+        self.tf_broadcaster.sendTransform(t)
 
     def cmd_vel_callback(self, msg: Twist):
         """Convert a Twist message to a robot velocity command and send it."""
