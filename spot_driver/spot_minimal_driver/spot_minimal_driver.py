@@ -341,7 +341,6 @@ def main(args=None):
         if spot_driver_node:
             spot_driver_node.shutdown()
             spot_driver_node.destroy_node()
-        rclpy.shutdown()
 
 
 if __name__ == "__main__":
