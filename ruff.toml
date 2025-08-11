@@ -1,0 +1,10 @@
+line-length = 120
+target-version = "py310"
+
+# Settings are now organized into sections
+[lint]
+select = ["E", "W", "F", "I", "B"]
+ignore = ["E501"]
+
+[format]
+quote-style = "double"

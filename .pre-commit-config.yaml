@@ -1,23 +1,10 @@
-# See https://pre-commit.com for more information
-# See https://pre-commit.com/hooks.html for more hooks
 repos:
--   repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v5.0.0 # Using a recent, stable version is recommended
+-   repo: https://github.com/astral-sh/ruff-pre-commit
+    # Find the latest version on the ruff-pre-commit repository
+    rev: v0.12.8 
     hooks:
-    # Trims trailing whitespace from your files
-    -   id: trailing-whitespace
-    # Ensures every file ends with a single newline character
-    -   id: end-of-file-fixer
-    # Checks for merge conflict markers to prevent them from being committed
-    -   id: check-merge-conflict
-    # Checks YAML files for valid syntax
-    -   id: check-yaml
-
-# Optional but recommended: Add ROS-specific formatters and linters
--   repo: https://github.com/tier4/pre-commit-hooks-ros
-    rev: v0.7.0
-    hooks:
-    # Linter for Python code based on ROS 2 guidelines
-    -   id: flake8-ros
-    # Auto-formatter for package.xml files
-    -   id: prettier-package-xml
+      # Run the linter
+      - id: ruff
+        args: [--fix] # Optional: automatically fix what it can
+      # Run the formatter
+      - id: ruff-format

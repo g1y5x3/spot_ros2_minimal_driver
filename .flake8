@@ -1,6 +1,0 @@
-# .flake8
-
-[flake8]
-# Comma-separated list of error codes to ignore.
-# Add any specific codes you want to disable here.
-ignore = E501
