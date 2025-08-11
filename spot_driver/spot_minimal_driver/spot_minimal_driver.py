@@ -37,8 +37,6 @@ from bosdyn.client.lease import LeaseClient, LeaseKeepAlive
 from bosdyn.client.math_helpers import SE2Pose, SE3Pose, SE3Velocity
 from bosdyn.client.robot_command import RobotCommandBuilder, RobotCommandClient, blocking_stand
 from bosdyn.client.robot_state import RobotStateClient
-
-#
 from bosdyn.client.world_object import WorldObjectClient, world_object_pb2
 from geometry_msgs.msg import TransformStamped, Twist
 from nav_msgs.msg import Odometry
@@ -51,8 +49,6 @@ from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 
 from spot_action.action import MoveRelativeXY
 from spot_srvs.srv import GetTransform
-
-#
 
 
 class SpotROS2Driver(Node):
