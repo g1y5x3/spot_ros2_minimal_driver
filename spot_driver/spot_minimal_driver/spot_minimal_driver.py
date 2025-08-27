@@ -39,16 +39,14 @@ from bosdyn.client.math_helpers import SE2Pose, SE3Pose, SE3Velocity
 from bosdyn.client.robot_command import RobotCommandBuilder, RobotCommandClient, blocking_stand
 from bosdyn.client.robot_state import RobotStateClient, RobotStateStreamingClient
 from bosdyn.client.world_object import WorldObjectClient, world_object_pb2
-
 from geometry_msgs.msg import TransformStamped, Twist
 from nav_msgs.msg import Odometry
-from sensor_msgs.msg import Imu
-
 from rclpy.action import ActionServer
 from rclpy.action.server import ServerGoalHandle
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
+from sensor_msgs.msg import Imu
 from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 
 from spot_action.action import MoveRelativeXY
@@ -81,7 +79,7 @@ class SpotROS2Driver(Node):
         self.robot_state_client: Optional[RobotStateClient] = None
         self.command_client: Optional[RobotCommandClient] = None
         self.world_object_client: Optional[WorldObjectClient] = None
-        
+
         # self.robot_latest_state_stream_data = None
 
         try:
@@ -151,7 +149,7 @@ class SpotROS2Driver(Node):
         self.cmd_vel_subscriber = self.create_subscription(Twist, "cmd_vel", self.cmd_vel_callback, 10)
 
         self.robot_state_publisher = self.create_timer(
-            0.1,  self.publish_robot_state, callback_group=ReentrantCallbackGroup()
+            0.1, self.publish_robot_state, callback_group=ReentrantCallbackGroup()
         )
 
         self.robot_state_stream_publisher = self.create_timer(
@@ -273,7 +271,7 @@ class SpotROS2Driver(Node):
     def stream_robot_state(self):
         if self.robot_state_stream is None:
             return
-        
+
         imu_msg = Imu()
         with self.stream_lock:
             packet = self.robot_state_stream.inertial_state.packets[-1]
