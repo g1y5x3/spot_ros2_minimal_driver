@@ -36,7 +36,7 @@ from bosdyn.client.lease import Error as LeaseError
 from bosdyn.client.lease import LeaseClient, LeaseKeepAlive
 from bosdyn.client.math_helpers import SE2Pose, SE3Pose, SE3Velocity
 from bosdyn.client.robot_command import RobotCommandBuilder, RobotCommandClient, blocking_stand
-from bosdyn.client.robot_state import RobotStateClient
+from bosdyn.client.robot_state import RobotStateClient, RobotStateStreamingClient
 from bosdyn.client.world_object import WorldObjectClient, world_object_pb2
 from geometry_msgs.msg import TransformStamped, Twist
 from nav_msgs.msg import Odometry
@@ -77,10 +77,16 @@ class SpotROS2Driver(Node):
         self.robot_state_client: Optional[RobotStateClient] = None
         self.command_client: Optional[RobotCommandClient] = None
         self.world_object_client: Optional[WorldObjectClient] = None
+        
+        # self.robot_latest_state_stream_data = None
 
         try:
             # Robot initialization
             sdk = bosdyn.client.create_standard_sdk("SpotROS2DriverClient")
+
+            # TODO: Add option for enabling streaming client, and warning message about its license requirement
+            sdk.register_service_client(RobotStateStreamingClient)
+
             self.robot = sdk.create_robot(self.hostname)
             # NOTE: Must have both BOSDYN_CLIENT_USERNAME and BOSDYN_CLIENT_PASSWORD environment variables set
             bosdyn.client.util.authenticate(self.robot)
@@ -96,6 +102,8 @@ class SpotROS2Driver(Node):
 
             # Create SDK clients
             self.robot_state_client = self.robot.ensure_client(RobotStateClient.default_service_name)
+            self.robot_state_streaming_client = self.robot.ensure_client(RobotStateStreamingClient.default_service_name)
+
             self.command_client = self.robot.ensure_client(RobotCommandClient.default_service_name)
             lease_client = self.robot.ensure_client(LeaseClient.default_service_name)
             estop_client = self.robot.ensure_client(EstopClient.default_service_name)
@@ -133,6 +141,10 @@ class SpotROS2Driver(Node):
         self.cmd_vel_subscriber = self.create_subscription(Twist, "cmd_vel", self.cmd_vel_callback, 10)
         self.robot_state_publisher = self.create_timer(
             0.1, self.publish_robot_state, callback_group=ReentrantCallbackGroup()
+        )
+
+        self.robot_state_stream = self.create_timer(
+            0.01, self.stream_robot_state, callback_group=ReentrantCallbackGroup()
         )
 
         # Action server initialization
@@ -248,6 +260,21 @@ class SpotROS2Driver(Node):
         # TODO: Read internal robot inertial measurement and publish it but it's blocked by the Joint API license.
 
         # self.publish_transform(odom_tfrom_body, 'odom', 'base_link')
+
+    def stream_robot_state(self):
+        """Stream robot state data at a higher frequency."""
+        robot_state_stream = self.robot_state_streaming_client.get_robot_state_stream()
+        
+        count = 0
+        print("Started robot state streaming...")
+        for robot_state in robot_state_stream:
+            if not rclpy.ok():
+                break
+
+            if robot_state.inertial_state:
+                print(f"{count} Inertial state received: {robot_state.inertial_state}")
+            
+            count += 1
 
     def publish_odometry(self, odom_tfrom_body: SE3Pose, odom_vel_of_body: SE3Velocity, header: str, child: str):
         """Publish the odometry data."""
