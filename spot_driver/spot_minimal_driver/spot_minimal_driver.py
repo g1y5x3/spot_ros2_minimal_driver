@@ -15,6 +15,7 @@
 """A minimal ROS 2 driver for Boston Dynamics Spot robot."""
 
 import math
+import threading
 import time
 from typing import Optional
 
@@ -38,8 +39,11 @@ from bosdyn.client.math_helpers import SE2Pose, SE3Pose, SE3Velocity
 from bosdyn.client.robot_command import RobotCommandBuilder, RobotCommandClient, blocking_stand
 from bosdyn.client.robot_state import RobotStateClient, RobotStateStreamingClient
 from bosdyn.client.world_object import WorldObjectClient, world_object_pb2
+
 from geometry_msgs.msg import TransformStamped, Twist
 from nav_msgs.msg import Odometry
+from sensor_msgs.msg import Imu
+
 from rclpy.action import ActionServer
 from rclpy.action.server import ServerGoalHandle
 from rclpy.callback_groups import ReentrantCallbackGroup
@@ -134,16 +138,23 @@ class SpotROS2Driver(Node):
             self.get_logger().error(f"Failed to connect to the robot: {e}")
             raise
 
+        self.robot_state_stream = None
+        self.robot_state_stream_thread = threading.Thread(target=self.handle_state_streaming, daemon=True)
+        self.robot_state_stream_thread.start()
+        self.stream_lock = threading.Lock()
+
         # ROS 2 publishers and subscribers
         self.static_tf_broadcaster = StaticTransformBroadcaster(self)
         self.tf_broadcaster = TransformBroadcaster(self)
         self.odom_publisher = self.create_publisher(Odometry, "odom", 10)
+        self.imu_publisher = self.create_publisher(Imu, "imu", 10)
         self.cmd_vel_subscriber = self.create_subscription(Twist, "cmd_vel", self.cmd_vel_callback, 10)
+
         self.robot_state_publisher = self.create_timer(
-            0.1, self.publish_robot_state, callback_group=ReentrantCallbackGroup()
+            0.1,  self.publish_robot_state, callback_group=ReentrantCallbackGroup()
         )
 
-        self.robot_state_stream = self.create_timer(
+        self.robot_state_stream_publisher = self.create_timer(
             0.01, self.stream_robot_state, callback_group=ReentrantCallbackGroup()
         )
 
@@ -246,6 +257,44 @@ class SpotROS2Driver(Node):
             goal_handle.abort()
             return MoveRelativeXY.Result(success=False)
 
+    def handle_state_streaming(self):
+        """Stream robot state data at a much higher frequency."""
+        robot_state_stream = self.robot_state_streaming_client.get_robot_state_stream()
+        self.get_logger().info("Started robot state streaming...")
+        for robot_state in robot_state_stream:
+            if not rclpy.ok():
+                break
+
+            if robot_state.inertial_state and robot_state.inertial_state.packets:
+                with self.stream_lock:
+                    self.robot_state_stream = robot_state
+                    # print(f"Inertial state received:\n {robot_state.inertial_state.mounting_link_name}\n {robot_state.inertial_state.packets[-1]}")
+
+    def stream_robot_state(self):
+        if self.robot_state_stream is None:
+            return
+        
+        imu_msg = Imu()
+        with self.stream_lock:
+            packet = self.robot_state_stream.inertial_state.packets[-1]
+            imu_msg.header.stamp = self.get_clock().now().to_msg()
+            imu_msg.header.frame_id = "base_link"
+
+            imu_msg.orientation.x = packet.odom_rot_link.x
+            imu_msg.orientation.y = packet.odom_rot_link.y
+            imu_msg.orientation.z = packet.odom_rot_link.z
+            imu_msg.orientation.w = packet.odom_rot_link.w
+
+            imu_msg.angular_velocity.x = packet.angular_velocity_rt_odom_in_link_frame.x
+            imu_msg.angular_velocity.y = packet.angular_velocity_rt_odom_in_link_frame.y
+            imu_msg.angular_velocity.z = packet.angular_velocity_rt_odom_in_link_frame.z
+
+            imu_msg.linear_acceleration.x = packet.acceleration_rt_odom_in_link_frame.x
+            imu_msg.linear_acceleration.y = packet.acceleration_rt_odom_in_link_frame.y
+            imu_msg.linear_acceleration.z = packet.acceleration_rt_odom_in_link_frame.z
+
+            self.imu_publisher.publish(imu_msg)
+
     def publish_robot_state(self):
         """Periodic publish robot data (if connected)."""
         robot_state: RobotState = self.robot_state_client.get_robot_state()
@@ -256,25 +305,6 @@ class SpotROS2Driver(Node):
 
         odom_vel_of_body = robot_state.kinematic_state.velocity_of_body_in_odom
         self.publish_odometry(odom_tfrom_body, odom_vel_of_body, f"odom_{self.odom_frame}", "base_link")
-
-        # TODO: Read internal robot inertial measurement and publish it but it's blocked by the Joint API license.
-
-        # self.publish_transform(odom_tfrom_body, 'odom', 'base_link')
-
-    def stream_robot_state(self):
-        """Stream robot state data at a higher frequency."""
-        robot_state_stream = self.robot_state_streaming_client.get_robot_state_stream()
-        
-        count = 0
-        print("Started robot state streaming...")
-        for robot_state in robot_state_stream:
-            if not rclpy.ok():
-                break
-
-            if robot_state.inertial_state:
-                print(f"{count} Inertial state received: {robot_state.inertial_state}")
-            
-            count += 1
 
     def publish_odometry(self, odom_tfrom_body: SE3Pose, odom_vel_of_body: SE3Velocity, header: str, child: str):
         """Publish the odometry data."""
