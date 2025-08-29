@@ -19,6 +19,10 @@ def generate_launch_description():
         "odometry_frame", default_value="odom", description="Odometry frame to use (odom or vision)"
     )
 
+    declare_streaming_client_arg = DeclareLaunchArgument(
+        "use_streaming_client", default_value="false", description="Whether to use the streaming client (requires license)"
+    )
+
     declare_use_rviz_arg = DeclareLaunchArgument("use_rviz", default_value="true", description="Whether to start RViz")
 
     declare_rviz_config_arg = DeclareLaunchArgument(
@@ -28,6 +32,7 @@ def generate_launch_description():
     # Get launch configuration values
     hostname = LaunchConfiguration("hostname")
     odometry_frame = LaunchConfiguration("odometry_frame")
+    use_streaming_client = LaunchConfiguration("use_streaming_client")
     use_rviz = LaunchConfiguration("use_rviz")
     rviz_config = LaunchConfiguration("rviz_config")
 
@@ -41,6 +46,7 @@ def generate_launch_description():
             {
                 "hostname": hostname,
                 "odometry_frame": odometry_frame,
+                "use_streaming_client": use_streaming_client,
             }
         ],
         sigterm_timeout=LaunchConfiguration("sigterm_timeout", default="30"),
@@ -69,6 +75,7 @@ def generate_launch_description():
         [
             declare_hostname_arg,
             declare_odomframe_arg,
+            declare_streaming_client_arg,
             declare_use_rviz_arg,
             declare_rviz_config_arg,
             nodes_group,

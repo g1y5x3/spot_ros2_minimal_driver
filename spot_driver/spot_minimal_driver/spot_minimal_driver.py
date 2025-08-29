@@ -46,6 +46,7 @@ from rclpy.action.server import ServerGoalHandle
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
+from rclpy.timer import Timer
 from sensor_msgs.msg import Imu
 from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 
@@ -62,7 +63,6 @@ class SpotROS2Driver(Node):
 
         self.declare_parameter("hostname", "192.168.80.3")
         self.hostname = self.get_parameter("hostname").get_parameter_value().string_value
-        # TODO: Add parameter for robot username and password if needed
 
         # load the user-defined odometry frame
         self.declare_parameter("odometry_frame", "odom")
@@ -73,21 +73,29 @@ class SpotROS2Driver(Node):
         else:
             self.get_logger().info(f"Using odometry frame: {self.odom_frame}")
 
+        # if the user has a streaming client license, use it to get IMU data at 333Hz
+        self.declare_parameter("use_streaming_client", False)
+        self.use_streaming_client = self.get_parameter("use_streaming_client").get_parameter_value().bool_value
+
         self.robot: Optional[bosdyn.client.robot.Robot] = None
         self.lease_keep_alive: Optional[LeaseKeepAlive] = None
         self.estop_keep_alive: Optional[EstopKeepAlive] = None
         self.robot_state_client: Optional[RobotStateClient] = None
         self.command_client: Optional[RobotCommandClient] = None
         self.world_object_client: Optional[WorldObjectClient] = None
-
-        # self.robot_latest_state_stream_data = None
+        self.robot_state_stream_publisher: Optional[Timer] = None
+        self.robot_state_stream_thread: Optional[threading.Thread] = None
+        self.imu_publisher: Optional[rclpy.publisher.Publisher] = None
 
         try:
             # Robot initialization
             sdk = bosdyn.client.create_standard_sdk("SpotROS2DriverClient")
 
-            # TODO: Add option for enabling streaming client, and warning message about its license requirement
-            sdk.register_service_client(RobotStateStreamingClient)
+            if self.use_streaming_client:
+                self.get_logger().info("Using licensed streaming client for high-frequency IMU data.")
+                sdk.register_service_client(RobotStateStreamingClient)
+            else:
+                self.get_logger().info("Streaming client is disabled by default. In order to use it, you need to purchase an additional license from Boston Dynamics.")
 
             self.robot = sdk.create_robot(self.hostname)
             # NOTE: Must have both BOSDYN_CLIENT_USERNAME and BOSDYN_CLIENT_PASSWORD environment variables set
@@ -104,8 +112,8 @@ class SpotROS2Driver(Node):
 
             # Create SDK clients
             self.robot_state_client = self.robot.ensure_client(RobotStateClient.default_service_name)
-            self.robot_state_streaming_client = self.robot.ensure_client(RobotStateStreamingClient.default_service_name)
-
+            if self.use_streaming_client:
+                self.robot_state_streaming_client = self.robot.ensure_client(RobotStateStreamingClient.default_service_name)
             self.command_client = self.robot.ensure_client(RobotCommandClient.default_service_name)
             lease_client = self.robot.ensure_client(LeaseClient.default_service_name)
             estop_client = self.robot.ensure_client(EstopClient.default_service_name)
@@ -136,24 +144,14 @@ class SpotROS2Driver(Node):
             self.get_logger().error(f"Failed to connect to the robot: {e}")
             raise
 
-        self.robot_state_stream = None
-        self.robot_state_stream_thread = threading.Thread(target=self.handle_state_streaming, daemon=True)
-        self.robot_state_stream_thread.start()
-        self.stream_lock = threading.Lock()
-
         # ROS 2 publishers and subscribers
         self.static_tf_broadcaster = StaticTransformBroadcaster(self)
         self.tf_broadcaster = TransformBroadcaster(self)
         self.odom_publisher = self.create_publisher(Odometry, "odom", 10)
-        self.imu_publisher = self.create_publisher(Imu, "imu", 10)
         self.cmd_vel_subscriber = self.create_subscription(Twist, "cmd_vel", self.cmd_vel_callback, 10)
 
         self.robot_state_publisher = self.create_timer(
             0.1, self.publish_robot_state, callback_group=ReentrantCallbackGroup()
-        )
-
-        self.robot_state_stream_publisher = self.create_timer(
-            0.01, self.stream_robot_state, callback_group=ReentrantCallbackGroup()
         )
 
         # Action server initialization
@@ -166,6 +164,18 @@ class SpotROS2Driver(Node):
         )
 
         self.srv = self.create_service(GetTransform, "get_fiducial_transform", self.handle_get_transform)
+
+        if self.use_streaming_client:
+            self.robot_state_stream = None
+            self.robot_state_stream_thread = threading.Thread(target=self.handle_state_streaming, daemon=True)
+            self.robot_state_stream_thread.start()
+            self.stream_lock = threading.Lock()
+
+            self.imu_publisher = self.create_publisher(Imu, "imu", 10)
+
+            self.robot_state_stream_publisher = self.create_timer(
+                0.01, self.stream_robot_state, callback_group=ReentrantCallbackGroup()
+            )
 
     def handle_get_transform(self, request, response):
         fiducials = self.world_object_client.list_world_objects([world_object_pb2.WORLD_OBJECT_APRILTAG]).world_objects
@@ -221,7 +231,6 @@ class SpotROS2Driver(Node):
             cmd_id = self.command_client.robot_command(command, end_time_secs=time.time() + estimated_time)
 
             # feedback_msg = MoveRelativeXY.Feedback()
-
             while True:
                 if goal_handle.is_cancel_requested:
                     goal_handle.canceled()
@@ -257,15 +266,18 @@ class SpotROS2Driver(Node):
 
     def handle_state_streaming(self):
         """Stream robot state from the robot at 333Hz"""
-        robot_state_stream = self.robot_state_streaming_client.get_robot_state_stream()
-        self.get_logger().info("Started robot state streaming...")
-        for robot_state in robot_state_stream:
-            if not rclpy.ok():
-                break
+        try:
+            robot_state_stream = self.robot_state_streaming_client.get_robot_state_stream()
+            self.get_logger().info("Started robot state streaming...")
+            for robot_state in robot_state_stream:
+                if not rclpy.ok():
+                    break
 
-            if robot_state.inertial_state and robot_state.inertial_state.packets:
-                with self.stream_lock:
-                    self.robot_state_stream = robot_state
+                if robot_state.inertial_state and robot_state.inertial_state.packets:
+                    with self.stream_lock:
+                        self.robot_state_stream = robot_state
+        except Exception as e:
+            self.get_logger().error(f"Robot state streaming error: {e}")
 
     def stream_robot_state(self):
         """Publish the latest robot state at 100Hz."""
@@ -361,6 +373,8 @@ class SpotROS2Driver(Node):
         """Shutdown the driver and release resources."""
         print("Shutting down the driver...")
 
+        # TODO: investigate this error "publisher's context is invalid"
+
         # stop all ROS 2 activity first
         if self.robot_state_publisher:
             print("Canceling robot state publisher timer.")
@@ -368,11 +382,6 @@ class SpotROS2Driver(Node):
         if self.robot_state_stream_publisher:
             print("Canceling robot state stream publisher timer.")
             self.robot_state_stream_publisher.cancel()
-
-        # wait for the background thread to exit
-        if self.robot_state_stream_thread and self.robot_state_stream_thread.is_alive():
-            print("Waiting for state streaming thread to exit.")
-            self.robot_state_stream_thread.join(timeout=2.0)  # Add a timeout for safety
 
         # power off requires lease so we do it before releasing
         if self.robot and self.robot.is_powered_on():
@@ -410,10 +419,13 @@ def main(args=None):
     finally:
         if spot_driver_node:
             spot_driver_node.shutdown()
+            print("Driver node shut down.")
         if executor:
             executor.shutdown()
+            print("Executor shut down.")
         if spot_driver_node:
             spot_driver_node.destroy_node()
+            print("Driver node destroyed.")
 
 
 if __name__ == "__main__":
