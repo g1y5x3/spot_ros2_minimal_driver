@@ -95,7 +95,9 @@ class SpotROS2Driver(Node):
                 self.get_logger().info("Using licensed streaming client for high-frequency IMU data.")
                 sdk.register_service_client(RobotStateStreamingClient)
             else:
-                self.get_logger().info("Streaming client is disabled by default. In order to use it, you need to purchase an additional license from Boston Dynamics.")
+                self.get_logger().info(
+                    "Streaming client is disabled by default. In order to use it, you need to purchase an additional license from Boston Dynamics."
+                )
 
             self.robot = sdk.create_robot(self.hostname)
             # NOTE: Must have both BOSDYN_CLIENT_USERNAME and BOSDYN_CLIENT_PASSWORD environment variables set
@@ -113,7 +115,9 @@ class SpotROS2Driver(Node):
             # Create SDK clients
             self.robot_state_client = self.robot.ensure_client(RobotStateClient.default_service_name)
             if self.use_streaming_client:
-                self.robot_state_streaming_client = self.robot.ensure_client(RobotStateStreamingClient.default_service_name)
+                self.robot_state_streaming_client = self.robot.ensure_client(
+                    RobotStateStreamingClient.default_service_name
+                )
             self.command_client = self.robot.ensure_client(RobotCommandClient.default_service_name)
             lease_client = self.robot.ensure_client(LeaseClient.default_service_name)
             estop_client = self.robot.ensure_client(EstopClient.default_service_name)

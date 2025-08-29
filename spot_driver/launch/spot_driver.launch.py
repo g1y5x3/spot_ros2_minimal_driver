@@ -20,7 +20,9 @@ def generate_launch_description():
     )
 
     declare_streaming_client_arg = DeclareLaunchArgument(
-        "use_streaming_client", default_value="false", description="Whether to use the streaming client (requires license)"
+        "use_streaming_client",
+        default_value="false",
+        description="Whether to use the streaming client (requires license)",
     )
 
     declare_use_rviz_arg = DeclareLaunchArgument("use_rviz", default_value="true", description="Whether to start RViz")
