@@ -353,6 +353,21 @@ class SpotROS2Driver(Node):
 
     def shutdown(self):
         """Shutdown the driver and release resources."""
+        print("Shutting down the driver...")
+
+        # stop all ROS 2 activity first
+        if self.robot_state_publisher:
+            print("Canceling robot state publisher timer.")
+            self.robot_state_publisher.cancel()
+        if self.robot_state_stream_publisher:
+            print("Canceling robot state stream publisher timer.")
+            self.robot_state_stream_publisher.cancel()
+
+        # wait for the background thread to exit
+        if self.robot_state_stream_thread and self.robot_state_stream_thread.is_alive():
+            print("Waiting for state streaming thread to exit.")
+            self.robot_state_stream_thread.join(timeout=2.0) # Add a timeout for safety
+
         # power off requires lease so we do it before releasing
         if self.robot and self.robot.is_powered_on():
             self.robot.power_off(cut_immediately=False, timeout_sec=20)
@@ -372,6 +387,7 @@ def main(args=None):
     """Initialize and run the Spot ROS 2 driver node."""
     rclpy.init(args=args)
     spot_driver_node = None
+    executor = None
 
     try:
         spot_driver_node = SpotROS2Driver()
@@ -386,10 +402,11 @@ def main(args=None):
         if spot_driver_node:
             print(f"Shutting down the Robot due to Spot-SDK error: {e}")
     finally:
+        if spot_driver_node:
+            spot_driver_node.shutdown()
         if executor:
             executor.shutdown()
         if spot_driver_node:
-            spot_driver_node.shutdown()
             spot_driver_node.destroy_node()
 
 
