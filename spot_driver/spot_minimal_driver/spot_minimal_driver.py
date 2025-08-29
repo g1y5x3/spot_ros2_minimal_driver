@@ -21,7 +21,9 @@ from typing import Optional
 
 import bosdyn.client
 import bosdyn.client.util
+import cv2
 import rclpy
+from bosdyn.api import image_pb2
 from bosdyn.api.basic_command_pb2 import RobotCommandFeedbackStatus
 from bosdyn.api.robot_state_pb2 import ImuState, RobotState
 from bosdyn.client import ResponseError, RpcError
@@ -33,6 +35,7 @@ from bosdyn.client.frame_helpers import (
     get_a_tform_b,
     get_se2_a_tform_b,
 )
+from bosdyn.client.image import ImageClient, build_image_request
 from bosdyn.client.lease import Error as LeaseError
 from bosdyn.client.lease import LeaseClient, LeaseKeepAlive
 from bosdyn.client.math_helpers import SE2Pose, SE3Pose, SE3Velocity
@@ -47,7 +50,7 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.timer import Timer
-from sensor_msgs.msg import Imu
+from sensor_msgs.msg import Imu, Image
 from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 
 from spot_action.action import MoveRelativeXY
@@ -86,6 +89,7 @@ class SpotROS2Driver(Node):
         self.robot_state_stream_publisher: Optional[Timer] = None
         self.robot_state_stream_thread: Optional[threading.Thread] = None
         self.imu_publisher: Optional[rclpy.publisher.Publisher] = None
+        self.image_publisher: Optional[rclpy.publisher.Publisher] = None
 
         try:
             # Robot initialization
@@ -102,6 +106,7 @@ class SpotROS2Driver(Node):
             self.robot = sdk.create_robot(self.hostname)
             # NOTE: Must have both BOSDYN_CLIENT_USERNAME and BOSDYN_CLIENT_PASSWORD environment variables set
             bosdyn.client.util.authenticate(self.robot)
+            self.robot.sync_with_directory()
             self.robot.time_sync.wait_for_sync()
 
             # NOTE: Not sure if this is necessary
@@ -112,23 +117,24 @@ class SpotROS2Driver(Node):
 
             self.get_logger().info("Successfully authenticated and connected to the robot.")
 
-            # Create SDK clients
+            # Create clients
             self.robot_state_client = self.robot.ensure_client(RobotStateClient.default_service_name)
             if self.use_streaming_client:
                 self.robot_state_streaming_client = self.robot.ensure_client(
                     RobotStateStreamingClient.default_service_name
                 )
             self.command_client = self.robot.ensure_client(RobotCommandClient.default_service_name)
-            lease_client = self.robot.ensure_client(LeaseClient.default_service_name)
-            estop_client = self.robot.ensure_client(EstopClient.default_service_name)
             self.world_object_client = self.robot.ensure_client(WorldObjectClient.default_service_name)
+            self.image_client = self.robot.ensure_client(ImageClient.default_service_name)
             self.get_logger().info("Robot clients created.")
 
             # Lease management
+            lease_client = self.robot.ensure_client(LeaseClient.default_service_name)
             self.lease_keep_alive = LeaseKeepAlive(lease_client, must_acquire=True, return_at_exit=True)
             self.get_logger().info("Acquired lease.")
 
             # Acquire E-Stop
+            estop_client = self.robot.ensure_client(EstopClient.default_service_name)
             estop_endpoint = EstopEndpoint(estop_client, "SpotROS2DriverEStop", 10.0)
             estop_endpoint.force_simple_setup()
             self.estop_keep_alive = EstopKeepAlive(estop_endpoint)
@@ -152,6 +158,7 @@ class SpotROS2Driver(Node):
         self.static_tf_broadcaster = StaticTransformBroadcaster(self)
         self.tf_broadcaster = TransformBroadcaster(self)
         self.odom_publisher = self.create_publisher(Odometry, "odom", 10)
+        self.image_publisher = self.create_publisher(Image, "camera/image_raw", 10)
         self.cmd_vel_subscriber = self.create_subscription(Twist, "cmd_vel", self.cmd_vel_callback, 10)
 
         self.robot_state_publisher = self.create_timer(
@@ -303,6 +310,11 @@ class SpotROS2Driver(Node):
         odom_vel_of_body = robot_state.kinematic_state.velocity_of_body_in_odom
         self.publish_odometry(odom_tfrom_body, odom_vel_of_body, f"odom_{self.odom_frame}", "base_link")
 
+        image_response = self.image_client.get_image_from_sources(["frontleft_fisheye_image"])[0]
+        pixel_format_name = image_pb2.Image.PixelFormat.Name(image_response.shot.image.pixel_format)
+        self.get_logger().info(f"Received image with pixel format: {pixel_format_name}")
+
+
     def publish_odometry(self, odom_tfrom_body: SE3Pose, odom_vel_of_body: SE3Velocity, header: str, child: str):
         """Publish the odometry data."""
         odom_msg = Odometry()
@@ -360,6 +372,9 @@ class SpotROS2Driver(Node):
 
         self.imu_publisher.publish(imu_msg)
 
+    # def publish_image(self, image_response):
+
+
     def cmd_vel_callback(self, msg: Twist):
         """Convert a Twist message to a robot velocity command and send it."""
         v_x, v_y, v_rot = msg.linear.x, msg.linear.y, msg.angular.z
@@ -373,20 +388,19 @@ class SpotROS2Driver(Node):
         except (RpcError, ResponseError) as e:
             self.get_logger().error(f"Failed to send velocity command: {e}")
 
-    def shutdown(self):
-        """Shutdown the driver and release resources."""
-        print("Shutting down the driver...")
-
-        # TODO: investigate this error "publisher's context is invalid"
-
-        # stop all ROS 2 activity first
+    def stop_comm(self):
         if self.robot_state_publisher:
-            print("Canceling robot state publisher timer.")
             self.robot_state_publisher.cancel()
         if self.robot_state_stream_publisher:
-            print("Canceling robot state stream publisher timer.")
             self.robot_state_stream_publisher.cancel()
+        if self.robot_state_stream_publisher:
+            self.robot_state_stream_publisher.cancel()
+        if self.robot_state_stream_thread and self.robot_state_stream_thread.is_alive():
+            self.robot_state_stream_thread.join(timeout=2.0)
 
+    def shutdown_robot(self):
+        """Shutdown the driver and release resources."""
+        print("Shutting down the robot...")
         # power off requires lease so we do it before releasing
         if self.robot and self.robot.is_powered_on():
             self.robot.power_off(cut_immediately=False, timeout_sec=20)
@@ -421,15 +435,10 @@ def main(args=None):
         if spot_driver_node:
             print(f"Shutting down the Robot due to Spot-SDK error: {e}")
     finally:
-        if spot_driver_node:
-            spot_driver_node.shutdown()
-            print("Driver node shut down.")
-        if executor:
+            # spot_driver_node.stop_comm()
             executor.shutdown()
-            print("Executor shut down.")
-        if spot_driver_node:
+            spot_driver_node.shutdown_robot()
             spot_driver_node.destroy_node()
-            print("Driver node destroyed.")
 
 
 if __name__ == "__main__":
