@@ -23,7 +23,7 @@ import bosdyn.client
 import bosdyn.client.util
 import rclpy
 from bosdyn.api.basic_command_pb2 import RobotCommandFeedbackStatus
-from bosdyn.api.robot_state_pb2 import RobotState
+from bosdyn.api.robot_state_pb2 import ImuState, RobotState
 from bosdyn.client import ResponseError, RpcError
 from bosdyn.client.estop import EstopClient, EstopEndpoint, EstopKeepAlive
 from bosdyn.client.frame_helpers import (
@@ -256,7 +256,7 @@ class SpotROS2Driver(Node):
             return MoveRelativeXY.Result(success=False)
 
     def handle_state_streaming(self):
-        """Stream robot state data at a much higher frequency."""
+        """Stream robot state from the robot at 333Hz"""
         robot_state_stream = self.robot_state_streaming_client.get_robot_state_stream()
         self.get_logger().info("Started robot state streaming...")
         for robot_state in robot_state_stream:
@@ -266,32 +266,15 @@ class SpotROS2Driver(Node):
             if robot_state.inertial_state and robot_state.inertial_state.packets:
                 with self.stream_lock:
                     self.robot_state_stream = robot_state
-                    # print(f"Inertial state received:\n {robot_state.inertial_state.mounting_link_name}\n {robot_state.inertial_state.packets[-1]}")
 
     def stream_robot_state(self):
+        """Publish the latest robot state at 100Hz."""
         if self.robot_state_stream is None:
             return
 
-        imu_msg = Imu()
         with self.stream_lock:
-            packet = self.robot_state_stream.inertial_state.packets[-1]
-            imu_msg.header.stamp = self.get_clock().now().to_msg()
-            imu_msg.header.frame_id = "base_link"
-
-            imu_msg.orientation.x = packet.odom_rot_link.x
-            imu_msg.orientation.y = packet.odom_rot_link.y
-            imu_msg.orientation.z = packet.odom_rot_link.z
-            imu_msg.orientation.w = packet.odom_rot_link.w
-
-            imu_msg.angular_velocity.x = packet.angular_velocity_rt_odom_in_link_frame.x
-            imu_msg.angular_velocity.y = packet.angular_velocity_rt_odom_in_link_frame.y
-            imu_msg.angular_velocity.z = packet.angular_velocity_rt_odom_in_link_frame.z
-
-            imu_msg.linear_acceleration.x = packet.acceleration_rt_odom_in_link_frame.x
-            imu_msg.linear_acceleration.y = packet.acceleration_rt_odom_in_link_frame.y
-            imu_msg.linear_acceleration.z = packet.acceleration_rt_odom_in_link_frame.z
-
-            self.imu_publisher.publish(imu_msg)
+            imu_state = self.robot_state_stream.inertial_state
+            self.publish_imu(imu_state)
 
     def publish_robot_state(self):
         """Periodic publish robot data (if connected)."""
@@ -338,6 +321,29 @@ class SpotROS2Driver(Node):
 
         self.tf_broadcaster.sendTransform(t)
 
+    def publish_imu(self, imu_state: ImuState):
+        """Publish the IMU data."""
+        packet = imu_state.packets[-1]
+
+        imu_msg = Imu()
+        imu_msg.header.stamp = self.get_clock().now().to_msg()
+        imu_msg.header.frame_id = "base_link"
+
+        imu_msg.orientation.x = packet.odom_rot_link.x
+        imu_msg.orientation.y = packet.odom_rot_link.y
+        imu_msg.orientation.z = packet.odom_rot_link.z
+        imu_msg.orientation.w = packet.odom_rot_link.w
+
+        imu_msg.angular_velocity.x = packet.angular_velocity_rt_odom_in_link_frame.x
+        imu_msg.angular_velocity.y = packet.angular_velocity_rt_odom_in_link_frame.y
+        imu_msg.angular_velocity.z = packet.angular_velocity_rt_odom_in_link_frame.z
+
+        imu_msg.linear_acceleration.x = packet.acceleration_rt_odom_in_link_frame.x
+        imu_msg.linear_acceleration.y = packet.acceleration_rt_odom_in_link_frame.y
+        imu_msg.linear_acceleration.z = packet.acceleration_rt_odom_in_link_frame.z
+
+        self.imu_publisher.publish(imu_msg)
+
     def cmd_vel_callback(self, msg: Twist):
         """Convert a Twist message to a robot velocity command and send it."""
         v_x, v_y, v_rot = msg.linear.x, msg.linear.y, msg.angular.z
@@ -366,7 +372,7 @@ class SpotROS2Driver(Node):
         # wait for the background thread to exit
         if self.robot_state_stream_thread and self.robot_state_stream_thread.is_alive():
             print("Waiting for state streaming thread to exit.")
-            self.robot_state_stream_thread.join(timeout=2.0) # Add a timeout for safety
+            self.robot_state_stream_thread.join(timeout=2.0)  # Add a timeout for safety
 
         # power off requires lease so we do it before releasing
         if self.robot and self.robot.is_powered_on():
