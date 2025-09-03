@@ -22,6 +22,7 @@ from typing import Optional
 import bosdyn.client
 import bosdyn.client.util
 import rclpy
+from bosdyn.api import image_pb2
 from bosdyn.api.basic_command_pb2 import RobotCommandFeedbackStatus
 from bosdyn.api.robot_state_pb2 import ImuState, RobotState
 from bosdyn.client import ResponseError, RpcError
@@ -319,15 +320,16 @@ class SpotROS2Driver(Node):
         self.publish_odometry(odom_tfrom_body, odom_vel_of_body, f"odom_{self.odom_frame}", "base_link")
 
         # publish camera TF
-        request = build_image_request("frontleft_fisheye_image")
+        request = build_image_request("frontleft_fisheye_image", pixel_format=image_pb2.Image.PIXEL_FORMAT_GREYSCALE_U8)
         image_response = self.image_client.get_image([request])
         self.get_logger().info(image_response[0].shot.frame_name_image_sensor)
         cam_tform_body = get_a_tform_b(
             image_response[0].shot.transforms_snapshot, BODY_FRAME_NAME, image_response[0].shot.frame_name_image_sensor
         )
+        # TODO: add a general publish_static_transform function 
         self.publish_transform(cam_tform_body, "base_link", "frontleft_fisheye")
-
-        # publish camera image topic
+        print(image_response[0].shot.image)
+        # self.publish_image(image_response[0])
 
     def publish_odometry(self, odom_tfrom_body: SE3Pose, odom_vel_of_body: SE3Velocity, header: str, child: str):
         """Publish the odometry data."""
@@ -363,6 +365,27 @@ class SpotROS2Driver(Node):
 
         self.tf_broadcaster.sendTransform(t)
 
+    def publish_image(self, image_response):
+        """
+        Converts a Spot SDK GREYSCALE_U8 image_response to a ROS 2 Image message and publishes it. 
+        """
+        image = image_response.shot.image
+        frame_id = image_response.shot.frame_name_image_sensor
+    
+        # Create the ROS 2 Image message
+        image_msg = Image()
+        image_msg.header.stamp = self.get_clock().now().to_msg()
+        image_msg.header.frame_id = frame_id
+        image_msg.height = image.rows
+        image_msg.width = image.cols
+        image_msg.encoding = "mono8"
+        image_msg.step = image.cols
+        image_msg.is_bigendian = False
+        image_msg.data = image.data
+    
+        # Publish the message
+        self.image_publisher.publish(image_msg)
+
     def publish_imu(self, imu_state: ImuState):
         """Publish the IMU data."""
         packet = imu_state.packets[-1]
@@ -386,14 +409,10 @@ class SpotROS2Driver(Node):
 
         self.imu_publisher.publish(imu_msg)
 
-    # def publish_image(self, image_response):
-
     def cmd_vel_callback(self, msg: Twist):
         """Convert a Twist message to a robot velocity command and send it."""
         v_x, v_y, v_rot = msg.linear.x, msg.linear.y, msg.angular.z
-
         command = RobotCommandBuilder.synchro_velocity_command(v_x=v_x, v_y=v_y, v_rot=v_rot)
-
         try:
             # Send the command to the robot
             self.command_client.robot_command(command, end_time_secs=time.time() + 0.5)
