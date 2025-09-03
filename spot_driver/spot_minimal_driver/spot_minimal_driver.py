@@ -80,6 +80,8 @@ class SpotROS2Driver(Node):
         self.declare_parameter("use_streaming_client", False)
         self.use_streaming_client = self.get_parameter("use_streaming_client").get_parameter_value().bool_value
 
+        self._shutdown_event = threading.Event()
+
         self.robot: Optional[bosdyn.client.robot.Robot] = None
         self.lease_keep_alive: Optional[LeaseKeepAlive] = None
         self.estop_keep_alive: Optional[EstopKeepAlive] = None
@@ -183,7 +185,6 @@ class SpotROS2Driver(Node):
             self.stream_lock = threading.Lock()
 
             self.imu_publisher = self.create_publisher(Imu, "imu", 10)
-
             self.robot_state_stream_publisher = self.create_timer(
                 0.01, self.stream_robot_state, callback_group=ReentrantCallbackGroup()
             )
@@ -281,7 +282,7 @@ class SpotROS2Driver(Node):
             robot_state_stream = self.robot_state_streaming_client.get_robot_state_stream()
             self.get_logger().info("Started robot state streaming...")
             for robot_state in robot_state_stream:
-                if not rclpy.ok():
+                if self._shutdown_event.is_set():
                     break
 
                 if robot_state.inertial_state and robot_state.inertial_state.packets:
@@ -292,6 +293,9 @@ class SpotROS2Driver(Node):
 
     def stream_robot_state(self):
         """Publish the latest robot state at 100Hz."""
+        if self._shutdown_event.is_set():
+            return
+ 
         if self.robot_state_stream is None:
             return
 
@@ -301,6 +305,9 @@ class SpotROS2Driver(Node):
 
     def publish_robot_state(self):
         """Periodic publish robot data (if connected)."""
+        if self._shutdown_event.is_set():
+            return
+        
         robot_state: RobotState = self.robot_state_client.get_robot_state()
         odom_tfrom_body = get_a_tform_b(
             robot_state.kinematic_state.transforms_snapshot, self.odom_frame, GRAV_ALIGNED_BODY_FRAME_NAME
@@ -389,14 +396,8 @@ class SpotROS2Driver(Node):
             self.get_logger().error(f"Failed to send velocity command: {e}")
 
     def stop_comm(self):
-        if self.robot_state_publisher:
-            self.robot_state_publisher.cancel()
-        if self.robot_state_stream_publisher:
-            self.robot_state_stream_publisher.cancel()
-        if self.robot_state_stream_publisher:
-            self.robot_state_stream_publisher.cancel()
-        if self.robot_state_stream_thread and self.robot_state_stream_thread.is_alive():
-            self.robot_state_stream_thread.join(timeout=2.0)
+        self._shutdown_event.set()
+        self.robot_state_publisher.cancel()
 
     def shutdown_robot(self):
         """Shutdown the driver and release resources."""
@@ -426,20 +427,17 @@ def main(args=None):
         spot_driver_node = SpotROS2Driver()
         executor = MultiThreadedExecutor()
         executor.add_node(spot_driver_node)
-        if rclpy.ok():
-            executor.spin()
-    except KeyboardInterrupt:
-        if spot_driver_node:
+        executor.spin()
+    except (KeyboardInterrupt, RpcError, ResponseError, LeaseError) as e:
+        if isinstance(e, KeyboardInterrupt):
             print("Shutting down the Robot due to KeyboardInterrupt.")
-    except (RpcError, ResponseError, LeaseError) as e:
-        if spot_driver_node:
+        else:
             print(f"Shutting down the Robot due to Spot-SDK error: {e}")
     finally:
-            # spot_driver_node.stop_comm()
-            executor.shutdown()
-            spot_driver_node.shutdown_robot()
-            spot_driver_node.destroy_node()
-
+        spot_driver_node.stop_comm()
+        spot_driver_node.shutdown_robot()
+        spot_driver_node.destroy_node()
+        executor.shutdown()
 
 if __name__ == "__main__":
     main()
