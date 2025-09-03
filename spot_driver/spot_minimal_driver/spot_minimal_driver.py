@@ -21,15 +21,13 @@ from typing import Optional
 
 import bosdyn.client
 import bosdyn.client.util
-import cv2
 import rclpy
-from bosdyn.api import image_pb2
 from bosdyn.api.basic_command_pb2 import RobotCommandFeedbackStatus
 from bosdyn.api.robot_state_pb2 import ImuState, RobotState
 from bosdyn.client import ResponseError, RpcError
 from bosdyn.client.estop import EstopClient, EstopEndpoint, EstopKeepAlive
 from bosdyn.client.frame_helpers import (
-    GRAV_ALIGNED_BODY_FRAME_NAME,
+    BODY_FRAME_NAME,
     ODOM_FRAME_NAME,
     VISION_FRAME_NAME,
     get_a_tform_b,
@@ -50,7 +48,7 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.timer import Timer
-from sensor_msgs.msg import Imu, Image
+from sensor_msgs.msg import Image, Imu
 from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 
 from spot_action.action import MoveRelativeXY
@@ -157,11 +155,12 @@ class SpotROS2Driver(Node):
             raise
 
         # ROS 2 publishers and subscribers
+        self.cmd_vel_subscriber = self.create_subscription(Twist, "cmd_vel", self.cmd_vel_callback, 10)
+
         self.static_tf_broadcaster = StaticTransformBroadcaster(self)
         self.tf_broadcaster = TransformBroadcaster(self)
         self.odom_publisher = self.create_publisher(Odometry, "odom", 10)
         self.image_publisher = self.create_publisher(Image, "camera/image_raw", 10)
-        self.cmd_vel_subscriber = self.create_subscription(Twist, "cmd_vel", self.cmd_vel_callback, 10)
 
         self.robot_state_publisher = self.create_timer(
             0.1, self.publish_robot_state, callback_group=ReentrantCallbackGroup()
@@ -230,7 +229,7 @@ class SpotROS2Driver(Node):
 
             # convert the goal pose from robot body frame to odom frame
             body_tform_goal = SE2Pose(x=goal.x, y=goal.y, angle=goal.yaw)
-            odom_tform_body = get_se2_a_tform_b(transforms, self.odom_frame, GRAV_ALIGNED_BODY_FRAME_NAME)
+            odom_tform_body = get_se2_a_tform_b(transforms, self.odom_frame, BODY_FRAME_NAME)
             odom_tfrom_goal = odom_tform_body * body_tform_goal
 
             command = RobotCommandBuilder.synchro_se2_trajectory_point_command(
@@ -295,7 +294,7 @@ class SpotROS2Driver(Node):
         """Publish the latest robot state at 100Hz."""
         if self._shutdown_event.is_set():
             return
- 
+
         if self.robot_state_stream is None:
             return
 
@@ -307,20 +306,28 @@ class SpotROS2Driver(Node):
         """Periodic publish robot data (if connected)."""
         if self._shutdown_event.is_set():
             return
-        
+
+        # publish odom TF
         robot_state: RobotState = self.robot_state_client.get_robot_state()
         odom_tfrom_body = get_a_tform_b(
-            robot_state.kinematic_state.transforms_snapshot, self.odom_frame, GRAV_ALIGNED_BODY_FRAME_NAME
+            robot_state.kinematic_state.transforms_snapshot, self.odom_frame, BODY_FRAME_NAME
         )
         self.publish_transform(odom_tfrom_body, f"odom_{self.odom_frame}", "base_link")
 
+        # publish odom topic
         odom_vel_of_body = robot_state.kinematic_state.velocity_of_body_in_odom
         self.publish_odometry(odom_tfrom_body, odom_vel_of_body, f"odom_{self.odom_frame}", "base_link")
 
-        image_response = self.image_client.get_image_from_sources(["frontleft_fisheye_image"])[0]
-        pixel_format_name = image_pb2.Image.PixelFormat.Name(image_response.shot.image.pixel_format)
-        self.get_logger().info(f"Received image with pixel format: {pixel_format_name}")
+        # publish camera TF
+        request = build_image_request("frontleft_fisheye_image")
+        image_response = self.image_client.get_image([request])
+        self.get_logger().info(image_response[0].shot.frame_name_image_sensor)
+        cam_tform_body = get_a_tform_b(
+            image_response[0].shot.transforms_snapshot, BODY_FRAME_NAME, image_response[0].shot.frame_name_image_sensor
+        )
+        self.publish_transform(cam_tform_body, "base_link", "frontleft_fisheye")
 
+        # publish camera image topic
 
     def publish_odometry(self, odom_tfrom_body: SE3Pose, odom_vel_of_body: SE3Velocity, header: str, child: str):
         """Publish the odometry data."""
@@ -381,7 +388,6 @@ class SpotROS2Driver(Node):
 
     # def publish_image(self, image_response):
 
-
     def cmd_vel_callback(self, msg: Twist):
         """Convert a Twist message to a robot velocity command and send it."""
         v_x, v_y, v_rot = msg.linear.x, msg.linear.y, msg.angular.z
@@ -402,16 +408,12 @@ class SpotROS2Driver(Node):
     def shutdown_robot(self):
         """Shutdown the driver and release resources."""
         print("Shutting down the robot...")
-        # power off requires lease so we do it before releasing
         if self.robot and self.robot.is_powered_on():
             self.robot.power_off(cut_immediately=False, timeout_sec=20)
             print("Robot powered off.")
-
-        # Release the E-Stop.
         if self.estop_keep_alive:
             self.estop_keep_alive.shutdown()
             print("E-Stop released.")
-
         if self.lease_keep_alive:
             self.lease_keep_alive.shutdown()
             print("Lease released.")
@@ -422,7 +424,6 @@ def main(args=None):
     rclpy.init(args=args)
     spot_driver_node = None
     executor = None
-
     try:
         spot_driver_node = SpotROS2Driver()
         executor = MultiThreadedExecutor()
@@ -438,6 +439,7 @@ def main(args=None):
         spot_driver_node.shutdown_robot()
         spot_driver_node.destroy_node()
         executor.shutdown()
+
 
 if __name__ == "__main__":
     main()
