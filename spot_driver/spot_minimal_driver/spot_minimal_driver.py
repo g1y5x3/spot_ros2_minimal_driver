@@ -320,16 +320,17 @@ class SpotROS2Driver(Node):
         self.publish_odometry(odom_tfrom_body, odom_vel_of_body, f"odom_{self.odom_frame}", "base_link")
 
         # publish camera TF
-        request = build_image_request("frontleft_fisheye_image", pixel_format=image_pb2.Image.PIXEL_FORMAT_GREYSCALE_U8)
+        request = build_image_request("frontleft_fisheye_image", 
+                                      pixel_format=image_pb2.Image.PIXEL_FORMAT_GREYSCALE_U8,
+                                      image_format=image_pb2.Image.FORMAT_RAW)
         image_response = self.image_client.get_image([request])
-        self.get_logger().info(image_response[0].shot.frame_name_image_sensor)
+        # self.get_logger().info(image_response[0].shot.frame_name_image_sensor)
         cam_tform_body = get_a_tform_b(
             image_response[0].shot.transforms_snapshot, BODY_FRAME_NAME, image_response[0].shot.frame_name_image_sensor
         )
         # TODO: add a general publish_static_transform function 
         self.publish_transform(cam_tform_body, "base_link", "frontleft_fisheye")
-        print(image_response[0].shot.image)
-        # self.publish_image(image_response[0])
+        self.publish_image(image_response[0])
 
     def publish_odometry(self, odom_tfrom_body: SE3Pose, odom_vel_of_body: SE3Velocity, header: str, child: str):
         """Publish the odometry data."""
