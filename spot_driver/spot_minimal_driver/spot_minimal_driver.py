@@ -45,7 +45,7 @@ from geometry_msgs.msg import TransformStamped, Twist
 from nav_msgs.msg import Odometry
 from rclpy.action import ActionServer
 from rclpy.action.server import ServerGoalHandle
-from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.timer import Timer
@@ -163,22 +163,38 @@ class SpotROS2Driver(Node):
         self.odom_publisher = self.create_publisher(Odometry, "odom", 10)
         self.image_publisher = self.create_publisher(Image, "camera/image_raw", 10)
 
+        robot_state_pub_group = MutuallyExclusiveCallbackGroup()
         self.robot_state_publisher = self.create_timer(
-            0.1, self.publish_robot_state, callback_group=ReentrantCallbackGroup()
+            0.1, self.publish_robot_state, callback_group=robot_state_pub_group
         )
 
+        # publish camera frame as static TF
+        request = build_image_request(
+            "frontleft_fisheye_image",
+            pixel_format=image_pb2.Image.PIXEL_FORMAT_GREYSCALE_U8,
+            image_format=image_pb2.Image.FORMAT_RAW,
+        )
+        image_response = self.image_client.get_image([request])
+        self.get_logger().info(image_response[0].shot.frame_name_image_sensor)
+        cam_tform_body = get_a_tform_b(
+            image_response[0].shot.transforms_snapshot, BODY_FRAME_NAME, image_response[0].shot.frame_name_image_sensor
+        )
+        self.publish_static_transform(cam_tform_body, "base_link", "frontleft_fisheye")
+
         # Action server initialization
+        action_group = MutuallyExclusiveCallbackGroup()
         self._action_server = ActionServer(
             self,
             MoveRelativeXY,
             "move_relative_xy",
             execute_callback=self.move_relative_xy,
-            callback_group=ReentrantCallbackGroup(),
+            callback_group=action_group,
         )
 
         self.srv = self.create_service(GetTransform, "get_fiducial_transform", self.handle_get_transform)
 
         if self.use_streaming_client:
+            robot_state_stream_group = MutuallyExclusiveCallbackGroup()
             self.robot_state_stream = None
             self.robot_state_stream_thread = threading.Thread(target=self.handle_state_streaming, daemon=True)
             self.robot_state_stream_thread.start()
@@ -186,34 +202,23 @@ class SpotROS2Driver(Node):
 
             self.imu_publisher = self.create_publisher(Imu, "imu", 10)
             self.robot_state_stream_publisher = self.create_timer(
-                0.01, self.stream_robot_state, callback_group=ReentrantCallbackGroup()
+                0.01, self.stream_robot_state, callback_group=robot_state_stream_group
             )
 
     def handle_get_transform(self, request, response):
         fiducials = self.world_object_client.list_world_objects([world_object_pb2.WORLD_OBJECT_APRILTAG]).world_objects
         if not fiducials:
             self.get_logger().warn("No AprilTag fiducials found.")
-            return
+            response.success = False
+            response.message = "No AprilTag fiducials found."
+            return response
 
         tform_odom_fiducial = get_a_tform_b(fiducials[0].transforms_snapshot, self.odom_frame, "filtered_fiducial_200")
-
         tform_fiducial_odom = tform_odom_fiducial.inverse()
+        self.publish_static_transform(tform_fiducial_odom, request.fiducial_name, f"odom_{self.odom_frame}")
 
-        t = TransformStamped()
-        # TODO: sync with the robot's internal time
-        t.header.stamp = self.get_clock().now().to_msg()
-        t.header.frame_id = request.fiducial_name
-        t.child_frame_id = f"odom_{self.odom_frame}"
-        t.transform.translation.x = tform_fiducial_odom.position.x
-        t.transform.translation.y = tform_fiducial_odom.position.y
-        t.transform.translation.z = tform_fiducial_odom.position.z
-        t.transform.rotation.x = tform_fiducial_odom.rotation.x
-        t.transform.rotation.y = tform_fiducial_odom.rotation.y
-        t.transform.rotation.z = tform_fiducial_odom.rotation.z
-        t.transform.rotation.w = tform_fiducial_odom.rotation.w
-
-        self.static_tf_broadcaster.sendTransform(t)
-        response.transform = t
+        response.success = True
+        response.message = "Transform successfully calculated."
         return response
 
     def move_relative_xy(self, goal_handle: ServerGoalHandle):
@@ -320,16 +325,12 @@ class SpotROS2Driver(Node):
         self.publish_odometry(odom_tfrom_body, odom_vel_of_body, f"odom_{self.odom_frame}", "base_link")
 
         # publish camera TF
-        request = build_image_request("frontleft_fisheye_image", 
-                                      pixel_format=image_pb2.Image.PIXEL_FORMAT_GREYSCALE_U8,
-                                      image_format=image_pb2.Image.FORMAT_RAW)
-        image_response = self.image_client.get_image([request])
-        # self.get_logger().info(image_response[0].shot.frame_name_image_sensor)
-        cam_tform_body = get_a_tform_b(
-            image_response[0].shot.transforms_snapshot, BODY_FRAME_NAME, image_response[0].shot.frame_name_image_sensor
+        request = build_image_request(
+            "frontleft_fisheye_image",
+            pixel_format=image_pb2.Image.PIXEL_FORMAT_GREYSCALE_U8,
+            image_format=image_pb2.Image.FORMAT_RAW,
         )
-        # TODO: add a general publish_static_transform function 
-        self.publish_transform(cam_tform_body, "base_link", "frontleft_fisheye")
+        image_response = self.image_client.get_image([request])
         self.publish_image(image_response[0])
 
     def publish_odometry(self, odom_tfrom_body: SE3Pose, odom_vel_of_body: SE3Velocity, header: str, child: str):
@@ -363,16 +364,30 @@ class SpotROS2Driver(Node):
         t.transform.rotation.y = tfrom.rotation.y
         t.transform.rotation.z = tfrom.rotation.z
         t.transform.rotation.w = tfrom.rotation.w
-
         self.tf_broadcaster.sendTransform(t)
+
+    def publish_static_transform(self, tfrom: SE3Pose, header: str, child: str):  # type: ignore
+        """Publish the transform from ODOM to BODY frame."""
+        t = TransformStamped()
+        t.header.stamp = self.get_clock().now().to_msg()
+        t.header.frame_id = header
+        t.child_frame_id = child
+        t.transform.translation.x = tfrom.position.x
+        t.transform.translation.y = tfrom.position.y
+        t.transform.translation.z = tfrom.position.z
+        t.transform.rotation.x = tfrom.rotation.x
+        t.transform.rotation.y = tfrom.rotation.y
+        t.transform.rotation.z = tfrom.rotation.z
+        t.transform.rotation.w = tfrom.rotation.w
+        self.static_tf_broadcaster.sendTransform(t)
 
     def publish_image(self, image_response):
         """
-        Converts a Spot SDK GREYSCALE_U8 image_response to a ROS 2 Image message and publishes it. 
+        Converts a Spot SDK GREYSCALE_U8 image_response to a ROS 2 Image message and publishes it.
         """
         image = image_response.shot.image
         frame_id = image_response.shot.frame_name_image_sensor
-    
+
         # Create the ROS 2 Image message
         image_msg = Image()
         image_msg.header.stamp = self.get_clock().now().to_msg()
@@ -383,7 +398,7 @@ class SpotROS2Driver(Node):
         image_msg.step = image.cols
         image_msg.is_bigendian = False
         image_msg.data = image.data
-    
+
         # Publish the message
         self.image_publisher.publish(image_msg)
 
