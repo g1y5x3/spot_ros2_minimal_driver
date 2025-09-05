@@ -165,7 +165,7 @@ class SpotROS2Driver(Node):
 
         robot_state_pub_group = MutuallyExclusiveCallbackGroup()
         self.robot_state_publisher = self.create_timer(
-            0.1, self.publish_robot_state, callback_group=robot_state_pub_group
+            0.5, self.publish_robot_state, callback_group=robot_state_pub_group
         )
 
         # publish camera frame as static TF
@@ -194,13 +194,13 @@ class SpotROS2Driver(Node):
         self.srv = self.create_service(GetTransform, "get_fiducial_transform", self.handle_get_transform)
 
         if self.use_streaming_client:
-            robot_state_stream_group = MutuallyExclusiveCallbackGroup()
             self.robot_state_stream = None
             self.robot_state_stream_thread = threading.Thread(target=self.handle_state_streaming, daemon=True)
             self.robot_state_stream_thread.start()
             self.stream_lock = threading.Lock()
 
             self.imu_publisher = self.create_publisher(Imu, "imu", 10)
+            robot_state_stream_group = MutuallyExclusiveCallbackGroup()
             self.robot_state_stream_publisher = self.create_timer(
                 0.01, self.stream_robot_state, callback_group=robot_state_stream_group
             )
@@ -298,8 +298,8 @@ class SpotROS2Driver(Node):
 
     def stream_robot_state(self):
         """Publish the latest robot state at 100Hz."""
-        if self._shutdown_event.is_set():
-            return
+        # if self._shutdown_event.is_set():
+        #     return
 
         if self.robot_state_stream is None:
             return
@@ -310,8 +310,8 @@ class SpotROS2Driver(Node):
 
     def publish_robot_state(self):
         """Periodic publish robot data (if connected)."""
-        if self._shutdown_event.is_set():
-            return
+        # if self._shutdown_event.is_set():
+        #     return
 
         # publish odom TF
         robot_state: RobotState = self.robot_state_client.get_robot_state()
@@ -438,7 +438,7 @@ class SpotROS2Driver(Node):
 
     def stop_comm(self):
         self._shutdown_event.set()
-        self.robot_state_publisher.cancel()
+        # self.robot_state_publisher.cancel()
 
     def shutdown_robot(self):
         """Shutdown the driver and release resources."""
