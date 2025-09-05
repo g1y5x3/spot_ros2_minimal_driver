@@ -165,7 +165,7 @@ class SpotROS2Driver(Node):
 
         robot_state_pub_group = MutuallyExclusiveCallbackGroup()
         self.robot_state_publisher = self.create_timer(
-            0.5, self.publish_robot_state, callback_group=robot_state_pub_group
+            0.1, self.publish_robot_state, callback_group=robot_state_pub_group
         )
 
         # publish camera frame as static TF
