@@ -163,6 +163,8 @@ class SpotROS2Driver(Node):
         self.odom_publisher = self.create_publisher(Odometry, "odom", 10)
         self.image_publisher = self.create_publisher(Image, "camera/image_raw", 10)
 
+        # NOTE: DDS can only suport timer periond 0.5s or higher, need to use Zenoh 
+        # middleware to achieve 0.1s
         robot_state_pub_group = MutuallyExclusiveCallbackGroup()
         self.robot_state_publisher = self.create_timer(
             0.1, self.publish_robot_state, callback_group=robot_state_pub_group
@@ -298,9 +300,6 @@ class SpotROS2Driver(Node):
 
     def stream_robot_state(self):
         """Publish the latest robot state at 100Hz."""
-        # if self._shutdown_event.is_set():
-        #     return
-
         if self.robot_state_stream is None:
             return
 
@@ -310,9 +309,6 @@ class SpotROS2Driver(Node):
 
     def publish_robot_state(self):
         """Periodic publish robot data (if connected)."""
-        # if self._shutdown_event.is_set():
-        #     return
-
         # publish odom TF
         robot_state: RobotState = self.robot_state_client.get_robot_state()
         odom_tfrom_body = get_a_tform_b(
@@ -436,9 +432,8 @@ class SpotROS2Driver(Node):
         except (RpcError, ResponseError) as e:
             self.get_logger().error(f"Failed to send velocity command: {e}")
 
-    def stop_comm(self):
+    def stop_thread(self):
         self._shutdown_event.set()
-        # self.robot_state_publisher.cancel()
 
     def shutdown_robot(self):
         """Shutdown the driver and release resources."""
@@ -470,7 +465,7 @@ def main(args=None):
         else:
             print(f"Shutting down the Robot due to Spot-SDK error: {e}")
     finally:
-        spot_driver_node.stop_comm()
+        spot_driver_node.stop_thread()
         spot_driver_node.shutdown_robot()
         spot_driver_node.destroy_node()
         executor.shutdown()
