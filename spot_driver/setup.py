@@ -26,7 +26,7 @@ setup(
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
-            "spot_driver_node = spot_minimal_driver.spot_minimal_driver:main",
+            "spot_driver_node = spot_driver.spot_driver:main",
         ],
     },
 )
