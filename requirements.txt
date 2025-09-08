@@ -1,0 +1,3 @@
+bosdyn-api >= 5.0.0
+bosdyn-client >= 5.0.0
+bosdyn-core >= 5.0.0
