@@ -49,7 +49,7 @@ from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.timer import Timer
-from sensor_msgs.msg import Image, Imu
+from sensor_msgs.msg import CameraInfo, Image, Imu
 from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 
 from spot_action.action import MoveRelativeXY
@@ -162,6 +162,7 @@ class SpotROS2Driver(Node):
         self.tf_broadcaster = TransformBroadcaster(self)
         self.odom_publisher = self.create_publisher(Odometry, "odom", 10)
         self.image_publisher = self.create_publisher(Image, "camera/image_raw", 10)
+        self.cam_info_publisher = self.create_publisher(CameraInfo, "camera/camera_info", 10)
 
         # NOTE: DDS can only suport timer periond 0.5s or higher, need to use Zenoh 
         # middleware to achieve 0.1s
@@ -328,6 +329,7 @@ class SpotROS2Driver(Node):
         )
         image_response = self.image_client.get_image([request])
         self.publish_image(image_response[0])
+        self.publish_camera_info(image_response[0])
 
     def publish_odometry(self, odom_tfrom_body: SE3Pose, odom_vel_of_body: SE3Velocity, header: str, child: str):
         """Publish the odometry data."""
@@ -376,6 +378,34 @@ class SpotROS2Driver(Node):
         t.transform.rotation.z = tfrom.rotation.z
         t.transform.rotation.w = tfrom.rotation.w
         self.static_tf_broadcaster.sendTransform(t)
+
+    def publish_camera_info(self, image_response):
+        frame_id = image_response.shot.frame_name_image_sensor
+
+        msg = CameraInfo()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = frame_id
+        msg.height = image_response.source.rows
+        msg.width = image_response.source.cols
+        msg.distortion_model = "plumb_bob"
+        msg.d = [0.0, 0.0, 0.0, 0.0, 0.0]  # Assuming no distortion; replace with actual values if available
+        fx = image_response.source.pinhole.intrinsics.focal_length.x
+        fy = image_response.source.pinhole.intrinsics.focal_length.y
+        cx = image_response.source.pinhole.intrinsics.principal_point.x
+        cy = image_response.source.pinhole.intrinsics.principal_point.y
+        msg.k = [fx,  0.0, cx,
+                 0.0, fy,  cy,
+                 0.0, 0.0, 1.0]
+
+        msg.r = [1.0, 0.0, 0.0,
+                 0.0, 1.0, 0.0,
+                 0.0, 0.0, 1.0]
+    
+        msg.p = [fx,  0.0, cx,  0.0,
+                 0.0, fy,  cy,  0.0,
+                 0.0, 0.0, 1.0, 0.0]
+        
+        self.cam_info_publisher.publish(msg)
 
     def publish_image(self, image_response):
         """
