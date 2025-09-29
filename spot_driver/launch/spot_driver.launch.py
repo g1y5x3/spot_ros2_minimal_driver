@@ -15,6 +15,14 @@ def generate_launch_description():
         "hostname", default_value="192.168.80.3", description="IP address of the Spot robot"
     )
 
+    declare_username_arg = DeclareLaunchArgument(
+        "username", default_value="user", description="Username for the Spot robot"
+    )
+
+    declare_password_arg = DeclareLaunchArgument(
+        "password", default_value="password", description="Password for the Spot robot"
+    )
+
     declare_odomframe_arg = DeclareLaunchArgument(
         "odometry_frame", default_value="odom", description="Odometry frame to use (odom or vision)"
     )
@@ -25,7 +33,7 @@ def generate_launch_description():
         description="Whether to use the streaming client (requires license)",
     )
 
-    declare_use_rviz_arg = DeclareLaunchArgument("use_rviz", default_value="true", description="Whether to start RViz")
+    declare_rviz_arg = DeclareLaunchArgument("rviz", default_value="false", description="Whether to start RViz")
 
     declare_rviz_config_arg = DeclareLaunchArgument(
         "rviz_config", default_value="spot.rviz", description="RViz configuration file name"
@@ -33,9 +41,12 @@ def generate_launch_description():
 
     # Get launch configuration values
     hostname = LaunchConfiguration("hostname")
+    username = LaunchConfiguration("username")
+    password = LaunchConfiguration("password")
+
     odometry_frame = LaunchConfiguration("odometry_frame")
     use_streaming_client = LaunchConfiguration("use_streaming_client")
-    use_rviz = LaunchConfiguration("use_rviz")
+    rviz = LaunchConfiguration("rviz")
     rviz_config = LaunchConfiguration("rviz_config")
 
     # Spot driver node
@@ -47,6 +58,8 @@ def generate_launch_description():
         parameters=[
             {
                 "hostname": hostname,
+                "username": username,
+                "password": password,
                 "odometry_frame": odometry_frame,
                 "use_streaming_client": use_streaming_client,
             }
@@ -61,7 +74,7 @@ def generate_launch_description():
         executable="rviz2",
         name="rviz2",
         output="screen",
-        condition=IfCondition(use_rviz),
+        condition=IfCondition(rviz),
         arguments=["-d", [FindPackageShare("spot_minimal_driver"), "/config/", rviz_config]],
     )
 
@@ -76,9 +89,11 @@ def generate_launch_description():
     return LaunchDescription(
         [
             declare_hostname_arg,
+            declare_username_arg,
+            declare_password_arg,
             declare_odomframe_arg,
             declare_streaming_client_arg,
-            declare_use_rviz_arg,
+            declare_rviz_arg,
             declare_rviz_config_arg,
             nodes_group,
         ]

@@ -64,7 +64,11 @@ class SpotROS2Driver(Node):
         super().__init__("spot_driver_node")
 
         self.declare_parameter("hostname", "192.168.80.3")
-        self.hostname = self.get_parameter("hostname").get_parameter_value().string_value
+        hostname = self.get_parameter("hostname").get_parameter_value().string_value
+        self.declare_parameter("username", "user")
+        username = self.get_parameter("username").get_parameter_value().string_value
+        self.declare_parameter("password", "password")
+        password = self.get_parameter("password").get_parameter_value().string_value
 
         # load the user-defined odometry frame
         self.declare_parameter("odometry_frame", "odom")
@@ -104,9 +108,13 @@ class SpotROS2Driver(Node):
                     "Streaming client is disabled by default. In order to use it, you need to purchase an additional license from Boston Dynamics."
                 )
 
-            self.robot = sdk.create_robot(self.hostname)
+            self.robot = sdk.create_robot(hostname)
+
             # NOTE: Must have both BOSDYN_CLIENT_USERNAME and BOSDYN_CLIENT_PASSWORD environment variables set
-            bosdyn.client.util.authenticate(self.robot)
+            # bosdyn.client.util.authenticate(self.robot)
+            # NOTE: username and password are manually provided
+            self.robot.authenticate(username, password)
+
             self.robot.sync_with_directory()
             self.robot.time_sync.wait_for_sync()
 
@@ -178,11 +186,11 @@ class SpotROS2Driver(Node):
             image_format=image_pb2.Image.FORMAT_RAW,
         )
         image_response = self.image_client.get_image([request])
-        self.get_logger().info(image_response[0].shot.frame_name_image_sensor)
         cam_tform_body = get_a_tform_b(
             image_response[0].shot.transforms_snapshot, BODY_FRAME_NAME, image_response[0].shot.frame_name_image_sensor
         )
         self.publish_static_transform(cam_tform_body, "base_link", "frontleft_fisheye")
+        self.get_logger().info(f"Published {image_response[0].shot.frame_name_image_sensor} TF.")
 
         # Action server initialization
         action_group = MutuallyExclusiveCallbackGroup()
