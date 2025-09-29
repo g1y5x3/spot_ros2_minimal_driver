@@ -19,7 +19,7 @@ ros2 run map_localization map_localizer_node
 ros2 run nav_goal_listener nav_goal_listener
 ```
 
-# To control spot
+## To control spot
 ```
 ros2 topic pub --once /cmd_vel geometry_msgs/msg/Twist "linear: {x: 0.5}"
 ```
@@ -31,3 +31,6 @@ ros2 action send_goal /move_relative_xy spot_action/action/MoveRelativeXY "{x: 1
 ```
 ros2 run teleop_twist_keyboard teleop_twist_keyboard
 ```
+
+## Setup the docker container on Spot CORE I/O
+sudo docker build -t spot_coreIO_ros2 --platform linux/arm64 -f Dockerfile.l4t .
